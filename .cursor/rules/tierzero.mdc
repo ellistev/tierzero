@@ -1,0 +1,70 @@
+---
+description: TierZero project architecture, patterns, and conventions
+alwaysApply: true
+---
+
+# TierZero — AI IT Ticket Resolution Agent
+
+TypeScript (Node 18+, ESM), LangGraph, LangChain, OpenAI, ChromaDB. No framework. No build step — `tsx` runs source directly.
+
+## What it does
+
+Reads tickets from ServiceNow / Jira / GitLab, searches a RAG knowledge base, then decides: `automate` | `draft_response` | `escalate` | `needs_info`. One structured LLM call decides, then the agent executes deterministically. No open-ended tool loops.
+
+## Agent flow (strict linear graph)
+
+```
+START → ingest → retrieve → decide → act → record → END
+```
+
+Defined in `src/agent/agent.ts` as a LangGraph `StateGraph`. The `decide` node makes a single structured LLM call (Zod schema). The `act` node executes deterministically based on the decision.
+
+## TicketConnector pattern
+
+All ticketing systems implement `TicketConnector` from `src/connectors/connector.ts`. The interface has: `listTickets`, `getTicket`, `getComments`, `addComment`, `listAttachments`, `downloadAttachment`, `uploadAttachment`, `updateTicket`. Adding a connector = implement that interface, nothing else.
+
+Current connectors: `servicenow.ts`, `jira.ts`, `gitlab.ts`.
+
+`TicketStatus` is a strict union: `"open" | "in_progress" | "pending" | "resolved" | "closed"`. Every connector must map to these — never invent new values.
+
+## Knowledge ingest pipeline
+
+`src/ingest/` importers write `.md` files to `knowledge/`, then the user runs `npm run index`. Importers: `azure-devops.ts` (wiki + work items), `confluence.ts`, `url-scraper.ts`, `ticket-miner.ts`. Shared utilities in `src/ingest/types.ts` (`htmlToMarkdown`, `slugify`, `writeIfChanged`).
+
+## Testing conventions
+
+- Framework: `node:test` + `node:assert/strict` — NOT vitest or jest
+- Only test pure helpers — no mocked HTTP, no real network calls
+- Export testable functions via `_testExports` or named exports from the module
+- Test files live next to source: `foo.ts` → `foo.test.ts`
+- Run: `npm test` (uses `tsx --test`)
+
+```typescript
+// ✅ correct test imports
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+```
+
+## Code conventions
+
+- Local imports use `.js` extension (ESM): `import { foo } from "./bar.js"`
+- No new dependencies without strong justification — `fetch`, `crypto`, `fs/promises` cover most needs
+- `async/await` throughout, no callbacks
+- No comments that narrate what the code does — only non-obvious intent or constraints
+
+## Key files
+
+| File | Purpose |
+|---|---|
+| `src/agent/agent.ts` | LangGraph StateGraph, AgentState, decision schema, 7 tools |
+| `src/agent/poller.ts` | Continuous polling loop |
+| `src/connectors/connector.ts` | TicketConnector interface |
+| `src/connectors/types.ts` | Ticket, TicketComment, TicketStatus, etc. |
+| `src/rag/indexer.ts` | Chunk + embed + upsert to ChromaDB |
+| `src/rag/retriever.ts` | MMR / similarity search |
+| `src/ingest/types.ts` | htmlToMarkdown, slugify, writeIfChanged |
+| `src/cli.ts` | All CLI commands |
+
+## Environment
+
+ChromaDB must be running (`docker run -p 8000:8000 chromadb/chroma`) before any RAG or indexing commands. `OPENAI_API_KEY` is always required. See `.env.example` for all variables.
