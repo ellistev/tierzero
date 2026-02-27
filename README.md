@@ -1,10 +1,25 @@
 # TierZero
 
-An AI agent that reads IT support tickets, searches a knowledge base of runbooks and procedures, and takes action -- posting a resolution, asking a clarifying question, or escalating with full context.
+AI-powered IT ticket resolution. Reads tickets, searches your runbooks, resolves or escalates -- no human in the loop.
 
-> **Tier 0** is the IT support level below Tier 1 -- fully automated, no human required.
+> **Tier 0** is the support level below Tier 1. Fully automated. No queue. No waiting.
 
 Built with **LangGraph** + **LangChain** + **ChromaDB** + **OpenAI**.
+
+---
+
+## Why
+
+Your L1 team spends 70% of their time on tickets that already have a documented fix. Password resets, VPN issues, disk cleanup -- the runbook exists, someone just has to read it and follow the steps.
+
+TierZero does that automatically:
+1. Reads the ticket
+2. Searches your knowledge base for the relevant procedure
+3. Either resolves it, asks a clarifying question, or escalates with full context
+
+Every action is auditable. Every decision includes reasoning. Confidence below threshold = automatic escalation to a human. The agent knows what it doesn't know.
+
+---
 
 ## How it works
 
@@ -15,95 +30,142 @@ Ticket arrives
 [ingest]    Load full comment thread from ServiceNow
      │
      ▼
-[retrieve]  RAG search the knowledge/ folder (MMR, top-5 chunks)
+[retrieve]  RAG search the knowledge/ folder (MMR, top-K chunks)
      │
      ▼
-[decide]    Single structured LLM call → decision + reasoning + drafted reply
+[decide]    Structured LLM call → decision + reasoning + confidence score
      │
-     ├─ automate       → post resolution publicly, mark resolved
-     ├─ draft_response → post helpful reply, wait for reporter
-     ├─ escalate       → post internal note with full reasoning, assign to human
+     ├─ automate       → post resolution, mark resolved
+     ├─ draft_response → post helpful reply, wait for confirmation
+     ├─ escalate       → internal note with full context, reassign to human
      └─ needs_info     → ask reporter one specific clarifying question
      │
      ▼
-[record]    Post internal audit note: decision, KB sources, step log
+[record]    Internal audit note: decision, KB sources, step log
 ```
 
-**No open-ended tool loop.** The agent plans once (structured LLM output with confidence score) then executes deterministically. Confidence below threshold → automatic escalation. Every run leaves a traceable internal note.
+**No open-ended tool loops.** The agent plans once (structured output with confidence score) then executes deterministically. Every run leaves a traceable internal note.
 
-## Project layout
+---
 
-```
-src/
-  connectors/
-    types.ts          Generic Ticket / TicketComment / TicketAttachment interfaces
-    connector.ts      TicketConnector interface (the contract every adapter implements)
-    servicenow.ts     ServiceNow Table API adapter
-  rag/
-    indexer.ts        Walk knowledge/, chunk, embed, upsert into ChromaDB
-    retriever.ts      Similarity search + MMR, metadata filtering, score threshold
-  agent/
-    agent.ts          LangGraph StateGraph: ingest → retrieve → decide → act → record
-  cli.ts              Entry point: index / search / run commands
-knowledge/            Drop your runbooks, SOPs, and docs here
-```
-
-## Setup
-
-**Prerequisites:** Node 18+, an OpenAI API key, a running ChromaDB instance.
+## Quick start
 
 ```bash
-# Start ChromaDB (Docker)
+# Start ChromaDB
 docker run -p 8000:8000 chromadb/chroma
 
 # Install
 npm install
 
 # Configure
-cp .env.example .env
-# Edit .env -- set OPENAI_API_KEY and optionally ServiceNow credentials
+cp .env.example .env   # add your OPENAI_API_KEY
+
+# Index your runbooks
+npm run index -- knowledge/
+
+# Test retrieval
+npm run dev -- search "password reset procedure"
+
+# Run on a real ticket
+npm run run-agent -- INC0012345 --instance-url https://myco.service-now.com --dry-run
 ```
+
+---
+
+## Project layout
+
+```
+src/
+  connectors/
+    types.ts          Generic Ticket / Comment / Attachment interfaces
+    connector.ts      TicketConnector interface (contract for any adapter)
+    servicenow.ts     ServiceNow Table API adapter (full CRUD)
+  rag/
+    indexer.ts        Chunk, embed, upsert into ChromaDB (with change detection)
+    retriever.ts      Similarity + MMR search, metadata filters, score thresholds
+  agent/
+    agent.ts          LangGraph StateGraph with typed state + 7 tools
+  cli.ts              CLI: index / search / run
+knowledge/            Your runbooks, SOPs, and docs go here
+```
+
+---
 
 ## Usage
 
-### 1. Build the knowledge base
+### Index your knowledge base
 
-Drop `.md`, `.txt`, `.json`, or `.pdf` files into `knowledge/` (any folder depth), then:
+Drop `.md`, `.txt`, `.json`, or `.pdf` files into `knowledge/`:
 
 ```bash
 npm run index -- knowledge/
-
-# Options
-npm run index -- knowledge/ --force          # re-index everything
-npm run index -- knowledge/ --stats          # show what's indexed, don't re-index
-npm run index -- knowledge/ --chunk-size 800 --chunk-overlap 150
+npm run index -- knowledge/ --force            # re-index everything
+npm run index -- knowledge/ --stats            # check what's indexed
+npm run index -- knowledge/ --chunk-size 800   # tune chunking
 ```
 
-### 2. Test retrieval (no agent, no ticket system)
+### Test retrieval
+
+Search without running the full agent:
 
 ```bash
-npm run dev -- search "password reset procedure"
-npm run dev -- search "VPN not connecting" --folder runbooks/ --k 3
-npm run dev -- search "disk full" --mmr      # diverse results across docs
+npm run dev -- search "VPN not connecting" --k 3
+npm run dev -- search "disk full" --mmr --folder runbooks/
 ```
 
-### 3. Run the agent on a real ticket
+### Run the agent
 
 ```bash
+# With flags
 npm run run-agent -- INC0012345 \
   --instance-url https://myco.service-now.com \
   --username svc-agent \
   --password secret
 
-# Or set env vars and omit flags
+# With env vars
 SERVICENOW_INSTANCE_URL=https://myco.service-now.com \
 SERVICENOW_USERNAME=svc-agent \
 SERVICENOW_PASSWORD=secret \
 npm run run-agent -- INC0012345
 
-# Dry run -- see what the agent would do without touching the ticket
+# Dry run -- see what it would do without touching anything
 npm run run-agent -- INC0012345 --dry-run
 ```
+
+---
+
+## Adding a connector
+
+TierZero ships with a ServiceNow connector. Adding Jira, Zendesk, or anything else:
+
+1. Implement `TicketConnector` from `src/connectors/connector.ts`
+2. Pass it as `deps.connector` when constructing `AgentGraph`
+
+The interface covers: `listTickets`, `getTicket`, `getComments`, `addComment`, `listAttachments`, `downloadAttachment`, `uploadAttachment`.
+
+---
+
+## Knowledge base structure
+
+Organize however you want. Folder paths become a searchable filter:
+
+```
+knowledge/
+  runbooks/
+    password-reset.md
+    vpn-troubleshooting.md
+  policies/
+    escalation-matrix.md
+    sla-definitions.md
+  config/
+    team-contacts.json
+```
+
+```bash
+npm run dev -- search "reset password" --folder runbooks/
+```
+
+---
 
 ## Environment variables
 
@@ -114,42 +176,21 @@ npm run run-agent -- INC0012345 --dry-run
 | `SERVICENOW_USERNAME` | For `run` | ServiceNow username |
 | `SERVICENOW_PASSWORD` | For `run` | ServiceNow password |
 
-## Knowledge base structure
+---
 
-Organise your `knowledge/` folder however makes sense. Source paths are stored as metadata, so folder names become a filter dimension:
+## Stack
 
-```
-knowledge/
-  runbooks/
-    password-reset.md
-    vpn-troubleshooting.md
-    disk-cleanup.md
-  policies/
-    escalation-matrix.md
-    sla-definitions.md
-  config/
-    team-contacts.json
-```
+| Layer | Tech |
+|---|---|
+| Agent orchestration | LangGraph (StateGraph) |
+| LLM + embeddings | OpenAI via LangChain |
+| Vector store | ChromaDB |
+| Text splitting | LangChain (language-aware) |
+| Connector | ServiceNow Table API |
+| Runtime | Node 18+ / tsx |
 
-Then search or restrict the agent to a folder:
+---
 
-```bash
-npm run dev -- search "reset password" --folder runbooks/
-```
+## License
 
-## Adding a new connector
-
-1. Implement `TicketConnector` from `src/connectors/connector.ts`
-2. Pass an instance as `deps.connector` when constructing `AgentGraph`
-
-The connector interface covers: `listTickets`, `getTicket`, `getComments`, `addComment`, `listAttachments`, `downloadAttachment`, `uploadAttachment`.
-
-## Tech stack
-
-| Layer | Package | Version |
-|---|---|---|
-| Agent graph | `@langchain/langgraph` | 1.2.x |
-| LLM / embeddings | `@langchain/openai` | 1.2.x |
-| Vector store | `@langchain/community` + `chromadb` | 1.1.x / 3.3.x |
-| Text splitting | `@langchain/textsplitters` | 1.0.x |
-| Runtime | `tsx` (no compile step) | 4.x |
+MIT
