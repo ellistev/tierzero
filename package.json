@@ -8,7 +8,7 @@
   },
   "scripts": {
     "typecheck": "tsc",
-    "test": "tsx --test src/connectors/servicenow.test.ts src/connectors/jira.test.ts src/rag/retriever.test.ts src/agent/agent.test.ts src/agent/poller.test.ts",
+    "test": "tsx --test src/connectors/servicenow.test.ts src/connectors/jira.test.ts src/connectors/gitlab.test.ts src/rag/retriever.test.ts src/agent/agent.test.ts src/agent/poller.test.ts",
     "test:integration": "tsx test/integration.ts",
     "dev": "tsx src/cli.ts",
     "index": "tsx src/cli.ts index",
