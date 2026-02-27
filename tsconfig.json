@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    // tsx recommendation: treat every file as a module even without import/export
+    "moduleDetection": "force",
+
+    // Preserve import/export syntax as-is; tsx/esbuild handles actual transformation.
+    // Paired with "Bundler" resolution this allows extensionless relative imports
+    // (e.g. "./indexer" instead of "./indexer.js") which is what the source uses.
+    "module": "Preserve",
+    "moduleResolution": "Bundler",
+
+    "target": "ES2022",
+
+    "strict": true,
+    "esModuleInterop": true,
+
+    // Each file must be independently compilable -- required by esbuild/tsx
+    "isolatedModules": true,
+
+    // Skip type-checking inside node_modules (LangChain types can be noisy)
+    "skipLibCheck": true,
+
+    "resolveJsonModule": true,
+
+    // tsc is used only for type-checking, not for emitting output.
+    // Run with: npm run typecheck
+    // To produce a build, remove noEmit and add "outDir": "dist"
+    "noEmit": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "venv", "dist"]
+}

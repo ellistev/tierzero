@@ -1,0 +1,33 @@
+node_modules/
+dist/
+venv/
+__pycache__/
+*.pyc
+
+# ChromaDB local stores (server mode dirs, Docker named volumes stay off-machine)
+.chroma_db/
+.chromadb/
+
+# Index state sidecar
+knowledge/.index-state.json
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Python demo artifacts
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# TypeScript
+*.tsbuildinfo
