@@ -100,8 +100,8 @@ export class ConfluenceImporter {
     let url: string | undefined = `${this.apiBase}/space?limit=50&type=global`;
 
     while (url) {
-      const data = await this.request<ConfluenceSpaceList>(url);
-      keys.push(...data.results.map((s) => s.key));
+      const data: ConfluenceSpaceList = await this.request<ConfluenceSpaceList>(url);
+      keys.push(...data.results.map((s: { key: string }) => s.key));
       url = data._links?.next ? `${this.cfg.baseUrl}${data._links.next}` : undefined;
     }
 
