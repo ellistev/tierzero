@@ -150,11 +150,13 @@ export class KnowledgeRetriever {
       modelName: "text-embedding-3-small",
     });
 
-    // TODO: verify constructor + ensureCollection API against installed version (same note as indexer.ts)
     this.vectorStore = new Chroma(embeddings, {
       collectionName: this.config.collectionName,
       url: this.config.chromaUrl,
     });
+
+    // Ensure the collection exists before querying -- throws early if Chroma is unreachable
+    await this.vectorStore.ensureCollection();
 
     return this.vectorStore;
   }

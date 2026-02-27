@@ -67,3 +67,13 @@ export interface Ticket {
   resolvedAt?: Date;
   dueAt?: Date;
 }
+
+/** Fields that can be mutated on an existing ticket. */
+export interface UpdateTicketFields {
+  status?: TicketStatus;
+  /** sys_id of the user to assign to */
+  assigneeId?: string;
+  /** sys_id of the assignment group */
+  assigneeGroupId?: string;
+  priority?: TicketPriority;
+}

@@ -1,4 +1,4 @@
-import type { Ticket, TicketComment, TicketAttachment } from "./types";
+import type { Ticket, TicketComment, TicketAttachment, UpdateTicketFields } from "./types";
 
 export interface ListTicketsOptions {
   status?: Ticket["status"] | Ticket["status"][];
@@ -45,4 +45,7 @@ export interface TicketConnector {
 
   /** Upload a file and attach it to a ticket -- returns the created attachment */
   uploadAttachment(ticketId: string, filename: string, data: Buffer, mimeType?: string): Promise<TicketAttachment>;
+
+  /** Update mutable fields on a ticket (status, assignee, priority). Returns the updated ticket. */
+  updateTicket(ticketId: string, fields: UpdateTicketFields): Promise<Ticket>;
 }

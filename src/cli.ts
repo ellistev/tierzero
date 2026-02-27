@@ -4,6 +4,7 @@ import { KnowledgeIndexer } from "./rag/indexer";
 import { KnowledgeRetriever } from "./rag/retriever";
 import { ServiceNowConnector } from "./connectors/servicenow";
 import { AgentGraph } from "./agent/agent";
+import { TicketPoller } from "./agent/poller";
 
 // ---------------------------------------------------------------------------
 // ANSI helpers -- minimal, no dependency
@@ -117,6 +118,12 @@ ${c.bold("run options (ServiceNow connector):")}
   --model <name>         LLM model                   ${c.dim("(default: gpt-4o-mini)")}
   --max-iterations <n>   Agent loop cap              ${c.dim("(default: 10)")}
   --dry-run              Log actions without executing them
+
+${c.bold("watch options (continuous polling loop):")}
+  --interval <s>         Poll interval in seconds    ${c.dim("(default: 60)")}
+  --batch-size <n>       Max tickets per cycle       ${c.dim("(default: 0 = unlimited)")}
+  --max-tickets <n>      Stop after N total tickets  ${c.dim("(default: 0 = run forever)")}
+  (also accepts all run options above for connector + agent config)
 `);
 }
 
@@ -312,6 +319,77 @@ async function cmdRun(args: ParsedArgs) {
 }
 
 // ---------------------------------------------------------------------------
+// watch command
+// ---------------------------------------------------------------------------
+
+async function cmdWatch(args: ParsedArgs) {
+  const instanceUrl = str(args.flags, "instance-url", process.env.SERVICENOW_INSTANCE_URL ?? "");
+  const username    = str(args.flags, "username",     process.env.SERVICENOW_USERNAME ?? "");
+  const password    = str(args.flags, "password",     process.env.SERVICENOW_PASSWORD ?? "");
+  const table       = str(args.flags, "table",        "incident");
+  const collection  = str(args.flags, "collection",   "knowledge");
+  const chromaUrl   = str(args.flags, "chroma-url",   "http://localhost:8000");
+  const model       = str(args.flags, "model",        "gpt-4o-mini");
+  const maxIter     = num(args.flags, "max-iterations", 10);
+  const dryRun      = bool(args.flags, "dry-run");
+  const intervalSec = num(args.flags, "interval",     60);
+  const batchSize   = num(args.flags, "batch-size",   0);
+  const maxTickets  = num(args.flags, "max-tickets",  0);
+
+  if (!instanceUrl) die("ServiceNow instance URL required. Pass --instance-url or set SERVICENOW_INSTANCE_URL.");
+  if (!username)    die("ServiceNow username required. Pass --username or set SERVICENOW_USERNAME.");
+  if (!password)    die("ServiceNow password required. Pass --password or set SERVICENOW_PASSWORD.");
+
+  const connector = new ServiceNowConnector({ instanceUrl, username, password, table });
+  const retriever = new KnowledgeRetriever({ collectionName: collection, chromaUrl });
+  const agent = new AgentGraph({ deps: { connector, retriever }, model, maxIterations: maxIter, dryRun });
+
+  let totalProcessed = 0;
+
+  const poller = new TicketPoller({
+    connector,
+    agent,
+    batchSize,
+    onTicketStart: (ticket) => {
+      console.log(`\n  ${c.bold("→")} ${c.cyan(ticket.externalId ?? ticket.id)}  ${ticket.title}`);
+    },
+    onTicketDone: (ticket, state) => {
+      const action = state.actionTaken?.type ?? "no_action";
+      console.log(`    ${c.green("✓")} ${state.decision ?? "none"} (${state.confidence.toFixed(2)})  action: ${c.dim(action)}`);
+      totalProcessed++;
+      if (maxTickets > 0 && totalProcessed >= maxTickets) {
+        console.log(c.yellow(`\nMax tickets (${maxTickets}) reached. Stopping.\n`));
+        poller.stop();
+        process.exit(0);
+      }
+    },
+    onTicketError: (ticket, err) => {
+      console.error(`    ${c.red("✗")} ${ticket.externalId ?? ticket.id}: ${err}`);
+    },
+    onCycleDone: (result) => {
+      if (result.ticketsFound === 0) {
+        console.log(c.dim(`  [${new Date().toLocaleTimeString()}] No new open tickets`));
+      } else {
+        console.log(c.dim(`  [${new Date().toLocaleTimeString()}] Cycle done — processed ${result.ticketsProcessed}/${result.ticketsFound}, errors: ${result.errors.length}`));
+      }
+    },
+  });
+
+  const intervalMs = intervalSec * 1000;
+  console.log(`\n${c.bold("Watching")} for open tickets  interval: ${c.dim(intervalSec + "s")}${batchSize ? `  batch: ${batchSize}` : ""}${maxTickets ? `  max: ${maxTickets}` : ""}${dryRun ? `  ${c.yellow("[dry-run]")}` : ""}`);
+  console.log(c.dim("Press Ctrl+C to stop.\n"));
+  hr();
+
+  poller.start(intervalMs);
+
+  process.on("SIGINT", () => {
+    poller.stop();
+    console.log(`\n\nStopped. Processed ${totalProcessed} ticket(s) total.\n`);
+    process.exit(0);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Entrypoint
 // ---------------------------------------------------------------------------
 
@@ -323,6 +401,7 @@ async function main() {
     case "index":  await cmdIndex(args);  break;
     case "search": await cmdSearch(args); break;
     case "run":    await cmdRun(args);    break;
+    case "watch":  await cmdWatch(args);  break;
     default:
       printHelp();
       if (command && command !== "--help" && command !== "-h") process.exit(1);

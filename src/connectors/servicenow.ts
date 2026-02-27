@@ -6,6 +6,7 @@ import type {
   TicketPriority,
   TicketType,
   TicketUser,
+  UpdateTicketFields,
 } from "./types";
 import type {
   TicketConnector,
@@ -91,6 +92,13 @@ const PRIORITY_MAP: Record<string, TicketPriority> = {
   "5": "low", // Planning
 };
 
+const PRIORITY_TO_CODE: Record<TicketPriority, string> = {
+  critical: "1",
+  high: "2",
+  medium: "3",
+  low: "4",
+};
+
 const CLASS_TYPE_MAP: Record<string, TicketType> = {
   incident: "incident",
   sc_request: "request",
@@ -164,18 +172,48 @@ function toAttachment(att: SNAttachment): TicketAttachment {
 }
 
 // ---------------------------------------------------------------------------
+// Update patch builder
+// ---------------------------------------------------------------------------
+
+/**
+ * Converts generic UpdateTicketFields into a ServiceNow-native PATCH body.
+ * Pure function — no network I/O, exported for unit testing via _testExports.
+ */
+export function buildUpdatePatch(fields: UpdateTicketFields): Record<string, string> {
+  const patch: Record<string, string> = {};
+
+  if (fields.status !== undefined) {
+    const code = STATUS_TO_STATE[fields.status];
+    if (!code) throw new Error(`Unmapped status: "${fields.status}"`);
+    patch.state = code;
+  }
+
+  if (fields.assigneeId !== undefined) patch.assigned_to = fields.assigneeId;
+  if (fields.assigneeGroupId !== undefined) patch.assignment_group = fields.assigneeGroupId;
+
+  if (fields.priority !== undefined) {
+    patch.priority = PRIORITY_TO_CODE[fields.priority];
+  }
+
+  return patch;
+}
+
+// ---------------------------------------------------------------------------
 // Test exports (internal helpers exposed for unit testing only)
 // ---------------------------------------------------------------------------
 
 /* istanbul ignore next */
 export const _testExports = {
   STATE_MAP,
+  STATUS_TO_STATE,
   PRIORITY_MAP,
+  PRIORITY_TO_CODE,
   CLASS_TYPE_MAP,
   snRef,
   snDate,
   toComment,
   toAttachment,
+  buildUpdatePatch,
 };
 
 // --- Connector implementation ---
@@ -346,5 +384,19 @@ export class ServiceNowConnector implements TicketConnector {
       }
     );
     return toAttachment(body.result);
+  }
+
+  async updateTicket(ticketId: string, fields: UpdateTicketFields): Promise<Ticket> {
+    const patch = buildUpdatePatch(fields);
+    const params = new URLSearchParams({ sysparm_display_value: "all" });
+    const { data } = await this.request<{ result: SNIncident }>(
+      `/api/now/table/${this.table}/${ticketId}?${params}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      }
+    );
+    return toTicket(data.result, this.baseUrl, this.table);
   }
 }

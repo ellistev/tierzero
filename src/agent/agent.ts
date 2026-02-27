@@ -78,6 +78,12 @@ export interface AgentState {
    * Kept separate from action so it can be reviewed before posting if needed.
    */
   draftedReply: string;
+  /**
+   * Short team key for escalation (e.g. "networking", "security").
+   * Populated by the LLM when decision === "escalate".
+   * Resolved to a connector-specific ID via AgentConfig.escalationTeams.
+   */
+  escalateTo: string;
 
   // --- Set by [act] ---
   actionTaken: AgentAction | null;
@@ -108,6 +114,7 @@ export function initialState(ticket: Ticket): AgentState {
     reasoning: "",
     confidence: 0,
     draftedReply: "",
+    escalateTo: "",
     actionTaken: null,
     iterationsUsed: 0,
     steps: [],
@@ -129,6 +136,7 @@ const AgentStateAnnotation = Annotation.Root({
   reasoning:        Annotation<string>({ reducer: (_, n) => n, default: () => "" }),
   confidence:       Annotation<number>({ reducer: (_, n) => n, default: () => 0 }),
   draftedReply:     Annotation<string>({ reducer: (_, n) => n, default: () => "" }),
+  escalateTo:       Annotation<string>({ reducer: (_, n) => n, default: () => "" }),
   actionTaken:      Annotation<AgentAction | null>({ reducer: (_, n) => n, default: () => null }),
   iterationsUsed:   Annotation<number>({ reducer: (_, n) => n, default: () => 0 }),
   steps:            Annotation<AgentStep[]>({ reducer: (c, n) => [...c, ...n], default: () => [] }),
@@ -149,6 +157,11 @@ const decisionOutputSchema = z.object({
     "automate/draft_response: public reply to reporter. " +
     "escalate: context notes for the receiving team (posted as internal note). " +
     "needs_info: single clarifying question for the reporter."
+  ),
+  escalateTo: z.string().default("").describe(
+    "Only when decision='escalate': short team key from the escalation matrix " +
+    "(e.g. 'networking', 'security', 'infrastructure', 'database', 'desktop', 'application'). " +
+    "Leave empty for other decisions."
   ),
 });
 
@@ -347,14 +360,10 @@ export const TOOLS = {
       input: EscalateInput,
       { connector }: AgentDeps
     ): Promise<EscalateOutput> => {
-      // Post internal note first so the receiving team has immediate context
-      const note = await connector.addComment(
-        input.ticketId,
-        `Escalation reason: ${input.reason}`,
-        { isInternal: true }
-      );
-      // Connector doesn't expose reassign directly -- customFields carries it
-      // TODO: extend TicketConnector with an updateTicket() method for status/assignee changes
+      const note = await connector.addComment(input.ticketId, input.reason, { isInternal: true });
+      if (input.assigneeId) {
+        await connector.updateTicket(input.ticketId, { assigneeId: input.assigneeId });
+      }
       return { success: true, internalNoteId: note.id };
     },
   } satisfies ToolDef<EscalateInput, EscalateOutput>,
@@ -372,7 +381,7 @@ export const TOOLS = {
       const comment = await connector.addComment(input.ticketId, input.resolution, {
         isInternal: false,
       });
-      // TODO: extend TicketConnector with updateTicket() to set status="resolved"
+      await connector.updateTicket(input.ticketId, { status: "resolved" });
       return { success: true, commentId: comment.id };
     },
   } satisfies ToolDef<ResolveInput, ResolveOutput>,
@@ -389,7 +398,7 @@ export const TOOLS = {
       const comment = await connector.addComment(input.ticketId, input.question, {
         isInternal: false,
       });
-      // TODO: extend TicketConnector with updateTicket() to set status="pending"
+      await connector.updateTicket(input.ticketId, { status: "pending" });
       return { commentId: comment.id };
     },
   } satisfies ToolDef<RequestInfoInput, RequestInfoOutput>,
@@ -445,6 +454,15 @@ export interface AgentConfig {
    * Useful for testing the decision logic without touching the real ticket system.
    */
   dryRun?: boolean;
+  /**
+   * Maps escalateTo team keys (as output by the LLM) to the connector-specific
+   * ID used to reassign the ticket (sys_id for ServiceNow, accountId for Jira).
+   * When a match is found, updateTicket({ assigneeId }) is called automatically.
+   *
+   * Example:
+   *   { networking: { sysId: "abc123", name: "Network Engineering" } }
+   */
+  escalationTeams?: Record<string, { sysId: string; name: string }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -461,12 +479,13 @@ export class AgentGraph {
       maxIterations: 10,
       minConfidence: 0.4,
       dryRun: false,
+      escalationTeams: {},
       ...config,
     };
   }
 
   private buildGraph() {
-    const { deps, model, openAIApiKey, minConfidence, dryRun } = this.cfg;
+    const { deps, model, openAIApiKey, minConfidence, dryRun, escalationTeams } = this.cfg;
     type S = typeof AgentStateAnnotation.State;
     const now = () => new Date().toISOString();
 
@@ -556,9 +575,10 @@ export class AgentGraph {
           reasoning,
           confidence: result.confidence,
           draftedReply: result.draftedReply,
+          escalateTo: result.escalateTo ?? "",
           steps: [{
             node: "decide",
-            summary: `${decision} (confidence: ${result.confidence.toFixed(2)}${overridden ? ", threshold override" : ""})`,
+            summary: `${decision} (confidence: ${result.confidence.toFixed(2)}${overridden ? ", threshold override" : ""}${result.escalateTo ? `, team: ${result.escalateTo}` : ""})`,
             timestamp: now(),
           }],
         };
@@ -568,6 +588,7 @@ export class AgentGraph {
           reasoning: `LLM call failed: ${err}`,
           confidence: 0,
           draftedReply: `AI agent analysis failed (${err}). Escalating for manual review.`,
+          escalateTo: "",
           steps: [{ node: "decide", summary: `LLM error → escalate`, timestamp: now() }],
         };
       }
@@ -610,17 +631,29 @@ export class AgentGraph {
           }
 
           case "escalate": {
+            const teamKey = state.escalateTo ?? "";
+            const team = escalationTeams[teamKey];
             const noteBody =
               `## AI Agent Escalation\n\n` +
               `**Reasoning:** ${reasoning}\n\n` +
+              `**Suggested team:** ${(team?.name ?? teamKey) || "Unspecified"}\n\n` +
               `**Notes for team:** ${draftedReply}`;
-            const { commentId } = await TOOLS.postInternalNote.execute(
-              { ticketId: ticket.id, body: noteBody },
+            const { internalNoteId } = await TOOLS.escalate.execute(
+              { ticketId: ticket.id, assigneeId: team?.sysId ?? "", reason: noteBody },
               deps
             );
             return {
-              actionTaken: { type: "escalated", assigneeId: "", assigneeName: "Unassigned", reason: reasoning },
-              steps: [{ node: "act", summary: `Escalated, internal note ${commentId}`, timestamp: now() }],
+              actionTaken: {
+                type: "escalated",
+                assigneeId: team?.sysId ?? "",
+                assigneeName: team?.name ?? (teamKey || "Unassigned"),
+                reason: reasoning,
+              },
+              steps: [{
+                node: "act",
+                summary: `Escalated to ${(team?.name ?? teamKey) || "unspecified"}, note ${internalNoteId}`,
+                timestamp: now(),
+              }],
             };
           }
 

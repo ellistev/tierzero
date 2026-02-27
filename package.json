@@ -8,11 +8,12 @@
   },
   "scripts": {
     "typecheck": "tsc",
-    "test": "tsx --test src/connectors/servicenow.test.ts src/rag/retriever.test.ts src/agent/agent.test.ts",
+    "test": "tsx --test src/connectors/servicenow.test.ts src/connectors/jira.test.ts src/rag/retriever.test.ts src/agent/agent.test.ts src/agent/poller.test.ts",
     "test:integration": "tsx test/integration.ts",
     "dev": "tsx src/cli.ts",
     "index": "tsx src/cli.ts index",
-    "run-agent": "tsx src/cli.ts run"
+    "run-agent": "tsx src/cli.ts run",
+    "watch": "tsx src/cli.ts watch"
   },
   "dependencies": {
     "@langchain/community": "^1.1.20",

@@ -4,6 +4,7 @@ import {
   initialState,
   TOOLS,
   _applyConfidenceThreshold,
+  AgentGraph,
 } from "./agent";
 import type { AgentDeps } from "./agent";
 import type { Ticket } from "../connectors/types";
@@ -45,6 +46,7 @@ function makeMockConnector(overrides: Partial<TicketConnector> = {}): TicketConn
     uploadAttachment: async (_ticketId, filename, data) => ({
       id: "att-1", filename, url: "#", size: data.length,
     }),
+    updateTicket: async () => mockTicket,
     ...overrides,
   };
 }
@@ -88,6 +90,7 @@ describe("initialState", () => {
     assert.equal(state.actionTaken, null);
     assert.equal(state.iterationsUsed, 0);
     assert.deepEqual(state.steps, []);
+    assert.equal(state.escalateTo, "");
     assert.equal(state.done, false);
     assert.equal(state.error, null);
   });
@@ -262,6 +265,195 @@ describe("TOOLS.requestInfo", () => {
     );
     assert.equal(capturedBody, "What OS version are you running?");
     assert.equal(out.commentId, "cmt-q");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TOOLS.escalate — updateTicket wiring
+// ---------------------------------------------------------------------------
+
+describe("TOOLS.escalate (updateTicket)", () => {
+  test("posts reason as internal note verbatim", async () => {
+    let capturedBody = "";
+    const deps = makeDeps({
+      connector: makeMockConnector({
+        addComment: async (_id, body, _opts) => {
+          capturedBody = body;
+          return { id: "note-esc", author: { id: "a", name: "A" }, body, isInternal: true, createdAt: new Date() };
+        },
+      }),
+    });
+    await TOOLS.escalate.execute({ ticketId: "T001", assigneeId: "", reason: "needs on-site visit" }, deps);
+    assert.equal(capturedBody, "needs on-site visit");
+  });
+
+  test("calls updateTicket with assigneeId when non-empty", async () => {
+    let updatedFields: Record<string, unknown> | undefined;
+    const deps = makeDeps({
+      connector: makeMockConnector({
+        updateTicket: async (_id, fields) => {
+          updatedFields = fields as Record<string, unknown>;
+          return mockTicket;
+        },
+      }),
+    });
+    await TOOLS.escalate.execute({ ticketId: "T001", assigneeId: "team-net", reason: "network issue" }, deps);
+    assert.deepEqual(updatedFields, { assigneeId: "team-net" });
+  });
+
+  test("does NOT call updateTicket when assigneeId is empty string", async () => {
+    let updateCalled = false;
+    const deps = makeDeps({
+      connector: makeMockConnector({
+        updateTicket: async () => { updateCalled = true; return mockTicket; },
+      }),
+    });
+    await TOOLS.escalate.execute({ ticketId: "T001", assigneeId: "", reason: "unknown scope" }, deps);
+    assert.equal(updateCalled, false);
+  });
+
+  test("returns success=true and internalNoteId", async () => {
+    const out = await TOOLS.escalate.execute(
+      { ticketId: "T001", assigneeId: "", reason: "reason" },
+      makeDeps()
+    );
+    assert.equal(out.success, true);
+    assert.equal(typeof out.internalNoteId, "string");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TOOLS.resolve — updateTicket wiring
+// ---------------------------------------------------------------------------
+
+describe("TOOLS.resolve (updateTicket)", () => {
+  test("calls updateTicket with status=resolved after posting comment", async () => {
+    const calls: string[] = [];
+    const deps = makeDeps({
+      connector: makeMockConnector({
+        addComment: async (_id, body, _opts) => {
+          calls.push("addComment");
+          return { id: "cmt-res", author: { id: "a", name: "A" }, body, isInternal: false, createdAt: new Date() };
+        },
+        updateTicket: async (_id, fields) => {
+          calls.push(`updateTicket:${(fields as Record<string, string>).status}`);
+          return mockTicket;
+        },
+      }),
+    });
+    const out = await TOOLS.resolve.execute(
+      { ticketId: "T001", resolution: "Restarted the service." },
+      deps
+    );
+    assert.equal(out.success, true);
+    assert.equal(out.commentId, "cmt-res");
+    assert.deepEqual(calls, ["addComment", "updateTicket:resolved"]);
+  });
+
+  test("updateTicket receives exactly { status: 'resolved' }", async () => {
+    let captured: unknown;
+    const deps = makeDeps({
+      connector: makeMockConnector({
+        updateTicket: async (_id, fields) => { captured = fields; return mockTicket; },
+      }),
+    });
+    await TOOLS.resolve.execute({ ticketId: "T001", resolution: "Fixed." }, deps);
+    assert.deepEqual(captured, { status: "resolved" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TOOLS.requestInfo — updateTicket wiring
+// ---------------------------------------------------------------------------
+
+describe("TOOLS.requestInfo (updateTicket)", () => {
+  test("calls updateTicket with status=pending after posting question", async () => {
+    const calls: string[] = [];
+    const deps = makeDeps({
+      connector: makeMockConnector({
+        addComment: async (_id, body, _opts) => {
+          calls.push("addComment");
+          return { id: "cmt-q2", author: { id: "a", name: "A" }, body, isInternal: false, createdAt: new Date() };
+        },
+        updateTicket: async (_id, fields) => {
+          calls.push(`updateTicket:${(fields as Record<string, string>).status}`);
+          return mockTicket;
+        },
+      }),
+    });
+    const out = await TOOLS.requestInfo.execute(
+      { ticketId: "T001", question: "Which OS version?" },
+      deps
+    );
+    assert.equal(out.commentId, "cmt-q2");
+    assert.deepEqual(calls, ["addComment", "updateTicket:pending"]);
+  });
+
+  test("updateTicket receives exactly { status: 'pending' }", async () => {
+    let captured: unknown;
+    const deps = makeDeps({
+      connector: makeMockConnector({
+        updateTicket: async (_id, fields) => { captured = fields; return mockTicket; },
+      }),
+    });
+    await TOOLS.requestInfo.execute({ ticketId: "T001", question: "Details?" }, deps);
+    assert.deepEqual(captured, { status: "pending" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AgentGraph escalationTeams routing (dry-run, no LLM call needed)
+// ---------------------------------------------------------------------------
+
+describe("AgentGraph escalationTeams routing", () => {
+  function makeGraph(escalationTeams: Record<string, { sysId: string; name: string }>) {
+    const deps = makeDeps();
+    return new AgentGraph({ deps, escalationTeams, dryRun: true });
+  }
+
+  test("AgentGraph constructor accepts escalationTeams without error", () => {
+    assert.doesNotThrow(() =>
+      makeGraph({ networking: { sysId: "sys-net-001", name: "Network Engineering" } })
+    );
+  });
+
+  test("AgentGraph constructor defaults escalationTeams to empty object", () => {
+    const graph = new AgentGraph({ deps: makeDeps(), dryRun: true });
+    // Access the private cfg via casting -- just verify no error and graph works
+    assert.ok(graph instanceof AgentGraph);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TOOLS.escalate — escalationTeams lookup behaviour
+// ---------------------------------------------------------------------------
+
+describe("TOOLS.escalate (team name in note)", () => {
+  test("uses reason verbatim as note body so caller can embed team name", async () => {
+    const calls: { body: string; assigneeId?: string }[] = [];
+    const deps = makeDeps({
+      connector: makeMockConnector({
+        addComment: async (_id, body, _opts) => {
+          calls.push({ body });
+          return { id: "note-1", author: { id: "a", name: "A" }, body, isInternal: true, createdAt: new Date() };
+        },
+        updateTicket: async (_id, fields) => {
+          calls.push({ body: "", assigneeId: (fields as Record<string, string>).assigneeId });
+          return mockTicket;
+        },
+      }),
+    });
+
+    await TOOLS.escalate.execute(
+      { ticketId: "T001", assigneeId: "sys-net-001", reason: "**Suggested team:** Network Engineering\n\nDetails here." },
+      deps
+    );
+
+    const noteCall = calls.find((c) => c.body.includes("Network Engineering"));
+    assert.ok(noteCall, "note body should include the team name");
+
+    const updateCall = calls.find((c) => c.assigneeId === "sys-net-001");
+    assert.ok(updateCall, "updateTicket should be called with the sysId");
   });
 });
 

@@ -2,7 +2,10 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { _testExports } from "./servicenow";
 
-const { STATE_MAP, PRIORITY_MAP, CLASS_TYPE_MAP, snRef, snDate, toComment, toAttachment } = _testExports;
+const {
+  STATE_MAP, STATUS_TO_STATE, PRIORITY_MAP, PRIORITY_TO_CODE,
+  CLASS_TYPE_MAP, snRef, snDate, toComment, toAttachment, buildUpdatePatch,
+} = _testExports;
 
 // ---------------------------------------------------------------------------
 // STATE_MAP
@@ -148,6 +151,88 @@ describe("toComment", () => {
     const c = toComment({ ...base, element: "comments" });
     assert.ok(c.createdAt instanceof Date);
     assert.equal(c.createdAt.toISOString(), "2024-03-15T09:00:00.000Z");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// STATUS_TO_STATE (reverse of STATE_MAP)
+// ---------------------------------------------------------------------------
+
+describe("STATUS_TO_STATE", () => {
+  test("is a complete reverse of STATE_MAP", () => {
+    // Every value in STATE_MAP should have a key in STATUS_TO_STATE
+    const uniqueStatuses = new Set(Object.values(STATE_MAP));
+    for (const status of uniqueStatuses) {
+      assert.ok(status in STATUS_TO_STATE, `STATUS_TO_STATE missing entry for "${status}"`);
+    }
+  });
+
+  test("round-trips: STATUS_TO_STATE[STATE_MAP[code]] === code (for primary codes)", () => {
+    // Primary codes (first occurrence wins in the reverse map)
+    const primaryCodes = ["1", "2", "3", "6", "7"] as const;
+    for (const code of primaryCodes) {
+      const status = STATE_MAP[code];
+      assert.equal(STATUS_TO_STATE[status], code, `round-trip failed for code ${code}`);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PRIORITY_TO_CODE (reverse of PRIORITY_MAP)
+// ---------------------------------------------------------------------------
+
+describe("PRIORITY_TO_CODE", () => {
+  test("maps all canonical priorities to ServiceNow codes", () => {
+    assert.equal(PRIORITY_TO_CODE.critical, "1");
+    assert.equal(PRIORITY_TO_CODE.high, "2");
+    assert.equal(PRIORITY_TO_CODE.medium, "3");
+    assert.equal(PRIORITY_TO_CODE.low, "4");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildUpdatePatch
+// ---------------------------------------------------------------------------
+
+describe("buildUpdatePatch", () => {
+  test("returns empty object for empty fields", () => {
+    assert.deepEqual(buildUpdatePatch({}), {});
+  });
+
+  test("maps status to ServiceNow state code", () => {
+    assert.deepEqual(buildUpdatePatch({ status: "resolved" }), { state: "6" });
+    assert.deepEqual(buildUpdatePatch({ status: "pending" }), { state: "3" });
+    assert.deepEqual(buildUpdatePatch({ status: "open" }), { state: "1" });
+    assert.deepEqual(buildUpdatePatch({ status: "in_progress" }), { state: "2" });
+    assert.deepEqual(buildUpdatePatch({ status: "closed" }), { state: "7" });
+  });
+
+  test("maps assigneeId to assigned_to", () => {
+    assert.deepEqual(buildUpdatePatch({ assigneeId: "user-sys-id" }), { assigned_to: "user-sys-id" });
+  });
+
+  test("maps assigneeGroupId to assignment_group", () => {
+    assert.deepEqual(buildUpdatePatch({ assigneeGroupId: "grp-sys-id" }), { assignment_group: "grp-sys-id" });
+  });
+
+  test("maps priority to ServiceNow priority code", () => {
+    assert.deepEqual(buildUpdatePatch({ priority: "critical" }), { priority: "1" });
+    assert.deepEqual(buildUpdatePatch({ priority: "high" }), { priority: "2" });
+    assert.deepEqual(buildUpdatePatch({ priority: "medium" }), { priority: "3" });
+    assert.deepEqual(buildUpdatePatch({ priority: "low" }), { priority: "4" });
+  });
+
+  test("combines multiple fields in one patch", () => {
+    const patch = buildUpdatePatch({ status: "resolved", assigneeId: "uid-1", priority: "high" });
+    assert.deepEqual(patch, { state: "6", assigned_to: "uid-1", priority: "2" });
+  });
+
+  test("throws for an unmapped status string", () => {
+    assert.throws(
+      // @ts-expect-error intentional bad input
+      () => buildUpdatePatch({ status: "unknown_status" }),
+      /Unmapped status/
+    );
   });
 });
 
