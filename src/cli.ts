@@ -3,8 +3,15 @@ import path from "path";
 import { KnowledgeIndexer } from "./rag/indexer";
 import { KnowledgeRetriever } from "./rag/retriever";
 import { ServiceNowConnector } from "./connectors/servicenow";
+import { JiraConnector } from "./connectors/jira";
+import { GitLabConnector } from "./connectors/gitlab";
 import { AgentGraph } from "./agent/agent";
 import { TicketPoller } from "./agent/poller";
+import { AzureDevOpsWikiImporter, AzureDevOpsWorkItemMiner } from "./ingest/azure-devops";
+import { ConfluenceImporter } from "./ingest/confluence";
+import { UrlScraper } from "./ingest/url-scraper";
+import { TicketMiner } from "./ingest/ticket-miner";
+import type { IngestResult } from "./ingest/types";
 
 // ---------------------------------------------------------------------------
 // ANSI helpers -- minimal, no dependency
@@ -124,6 +131,39 @@ ${c.bold("watch options (continuous polling loop):")}
   --batch-size <n>       Max tickets per cycle       ${c.dim("(default: 0 = unlimited)")}
   --max-tickets <n>      Stop after N total tickets  ${c.dim("(default: 0 = run forever)")}
   (also accepts all run options above for connector + agent config)
+
+${c.bold("import-wiki options:")}
+  --source <src>         "azuredevops" or "confluence"
+  Azure DevOps:
+    --org <name>         AzDO organization name      ${c.dim("(env: AZUREDEVOPS_ORG)")}
+    --project <name>     AzDO project name           ${c.dim("(env: AZUREDEVOPS_PROJECT)")}
+    --token <pat>        Personal Access Token       ${c.dim("(env: AZUREDEVOPS_TOKEN)")}
+    --wiki-id <id>       Specific wiki ID (optional)
+    --mode wiki|workitems|both  What to import       ${c.dim("(default: both)")}
+    --limit <n>          Max work items to mine      ${c.dim("(default: 100)")}
+  Confluence:
+    --base-url <url>     Confluence base URL         ${c.dim("(env: CONFLUENCE_BASE_URL)")}
+    --email <email>      Atlassian account email     ${c.dim("(env: CONFLUENCE_EMAIL)")}
+    --api-token <token>  API token                   ${c.dim("(env: CONFLUENCE_API_TOKEN)")}
+    --space-key <key>    Space key(s), comma-separated ${c.dim("(default: all spaces)")}
+  Shared:
+    --output <dir>       Output root directory       ${c.dim("(default: knowledge)")}
+
+${c.bold("mine-tickets options:")}
+  --connector <name>     "servicenow", "jira", or "gitlab"
+  ServiceNow: --instance-url --username --password
+  Jira:       --base-url --email --api-token --project-key
+  GitLab:     --base-url --token --project-id
+  --limit <n>            Max tickets to mine         ${c.dim("(default: 100)")}
+  --min-comments <n>     Quality gate                ${c.dim("(default: 1)")}
+  --since <ISO date>     Only tickets updated after this date
+  --output <dir>         Output root directory       ${c.dim("(default: knowledge)")}
+
+${c.bold("import-url options:")}
+  <urls...>              One or more URLs to scrape
+  --output <dir>         Output root directory       ${c.dim("(default: knowledge)")}
+  --ignore-robots        Skip robots.txt check
+  --timeout <ms>         Fetch timeout               ${c.dim("(default: 15000)")}
 `);
 }
 
@@ -390,6 +430,164 @@ async function cmdWatch(args: ParsedArgs) {
 }
 
 // ---------------------------------------------------------------------------
+// Shared ingest result printer
+// ---------------------------------------------------------------------------
+
+function printIngestResult(result: IngestResult, label: string) {
+  hr();
+  console.log(`\n${c.bold(label)}`);
+  console.log(`  Imported  : ${c.green(String(result.imported))}`);
+  console.log(`  Skipped   : ${c.dim(String(result.skipped))}  ${c.dim("(unchanged)")}`);
+  if (result.errors.length) {
+    console.log(`  Errors    : ${c.red(String(result.errors.length))}`);
+    result.errors.forEach((e) => console.log(`    ${c.red("·")} ${e.source}: ${e.error}`));
+  } else {
+    console.log(`  Errors    : ${c.dim("0")}`);
+  }
+  console.log(`  Duration  : ${c.dim((result.durationMs / 1000).toFixed(1) + "s")}`);
+  if (result.docs.length) {
+    console.log(`\n${c.bold("Files written:")}`);
+    result.docs.forEach((d) =>
+      console.log(`  ${c.dim("·")} ${c.cyan(d.filename)}  ${c.dim(`(${d.wordCount} words)`)}`)
+    );
+  }
+  console.log();
+}
+
+// ---------------------------------------------------------------------------
+// import-wiki command
+// ---------------------------------------------------------------------------
+
+async function cmdImportWiki(args: ParsedArgs) {
+  const source = str(args.flags, "source", "");
+  if (!source) die('--source required: "azuredevops" or "confluence"');
+
+  const outputDir = str(args.flags, "output", "knowledge");
+
+  if (source === "azuredevops") {
+    const org     = str(args.flags, "org",     process.env.AZUREDEVOPS_ORG     ?? "");
+    const project = str(args.flags, "project", process.env.AZUREDEVOPS_PROJECT ?? "");
+    const token   = str(args.flags, "token",   process.env.AZUREDEVOPS_TOKEN   ?? "");
+    const wikiId  = typeof args.flags["wiki-id"] === "string" ? args.flags["wiki-id"] : undefined;
+    const mode    = str(args.flags, "mode", "both");
+    const limit   = num(args.flags, "limit", 100);
+
+    if (!org)     die("Azure DevOps organization required. Pass --org or set AZUREDEVOPS_ORG.");
+    if (!project) die("Azure DevOps project required. Pass --project or set AZUREDEVOPS_PROJECT.");
+    if (!token)   die("Azure DevOps token required. Pass --token or set AZUREDEVOPS_TOKEN.");
+
+    const cfg = { organization: org, project, token, wikiId, outputDir };
+
+    if (mode === "wiki" || mode === "both") {
+      console.log(`\n${c.bold("Importing Azure DevOps Wiki")}  org: ${c.cyan(org)}  project: ${c.cyan(project)}`);
+      const importer = new AzureDevOpsWikiImporter(cfg);
+      const result = await importer.import();
+      printIngestResult(result, "Wiki Import Summary");
+    }
+
+    if (mode === "workitems" || mode === "both") {
+      console.log(`\n${c.bold("Mining Azure DevOps Work Items")}  limit: ${c.dim(String(limit))}`);
+      const miner = new AzureDevOpsWorkItemMiner({ ...cfg, limit });
+      const result = await miner.mine();
+      printIngestResult(result, "Work Item Mining Summary");
+    }
+
+  } else if (source === "confluence") {
+    const baseUrl  = str(args.flags, "base-url",  process.env.CONFLUENCE_BASE_URL  ?? "");
+    const email    = str(args.flags, "email",     process.env.CONFLUENCE_EMAIL      ?? "");
+    const apiToken = str(args.flags, "api-token", process.env.CONFLUENCE_API_TOKEN  ?? "");
+    const spaceKeysRaw = typeof args.flags["space-key"] === "string" ? args.flags["space-key"] : "";
+    const spaceKeys = spaceKeysRaw ? spaceKeysRaw.split(",").map((k) => k.trim()) : [];
+
+    if (!baseUrl)  die("Confluence base URL required. Pass --base-url or set CONFLUENCE_BASE_URL.");
+    if (!email)    die("Confluence email required. Pass --email or set CONFLUENCE_EMAIL.");
+    if (!apiToken) die("Confluence API token required. Pass --api-token or set CONFLUENCE_API_TOKEN.");
+
+    console.log(`\n${c.bold("Importing Confluence")}  ${c.cyan(baseUrl)}${spaceKeys.length ? `  spaces: ${spaceKeys.join(", ")}` : "  (all spaces)"}`);
+    const importer = new ConfluenceImporter({ baseUrl, email, apiToken, spaceKeys, outputDir });
+    const result = await importer.import();
+    printIngestResult(result, "Confluence Import Summary");
+
+  } else {
+    die(`Unknown --source "${source}". Use "azuredevops" or "confluence".`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// mine-tickets command
+// ---------------------------------------------------------------------------
+
+async function cmdMineTickets(args: ParsedArgs) {
+  const connectorName = str(args.flags, "connector", "");
+  if (!connectorName) die('--connector required: "servicenow", "jira", or "gitlab"');
+
+  const outputDir    = str(args.flags, "output", "knowledge");
+  const limit        = num(args.flags, "limit", 100);
+  const minComments  = num(args.flags, "min-comments", 1);
+  const sinceStr     = typeof args.flags["since"] === "string" ? args.flags["since"] : undefined;
+  const since        = sinceStr ? new Date(sinceStr) : undefined;
+
+  let connector;
+
+  if (connectorName === "servicenow") {
+    const instanceUrl = str(args.flags, "instance-url", process.env.SERVICENOW_INSTANCE_URL ?? "");
+    const username    = str(args.flags, "username",     process.env.SERVICENOW_USERNAME     ?? "");
+    const password    = str(args.flags, "password",     process.env.SERVICENOW_PASSWORD     ?? "");
+    if (!instanceUrl) die("ServiceNow instance URL required.");
+    if (!username)    die("ServiceNow username required.");
+    if (!password)    die("ServiceNow password required.");
+    connector = new ServiceNowConnector({ instanceUrl, username, password });
+
+  } else if (connectorName === "jira") {
+    const baseUrl    = str(args.flags, "base-url",    process.env.JIRA_BASE_URL    ?? "");
+    const email      = str(args.flags, "email",       process.env.JIRA_EMAIL       ?? "");
+    const apiToken   = str(args.flags, "api-token",   process.env.JIRA_API_TOKEN   ?? "");
+    const projectKey = str(args.flags, "project-key", process.env.JIRA_PROJECT_KEY ?? "");
+    if (!baseUrl)    die("Jira base URL required.");
+    if (!email)      die("Jira email required.");
+    if (!apiToken)   die("Jira API token required.");
+    connector = new JiraConnector({ baseUrl, email, apiToken, projectKey });
+
+  } else if (connectorName === "gitlab") {
+    const baseUrl   = str(args.flags, "base-url",   process.env.GITLAB_BASE_URL   ?? "https://gitlab.com");
+    const token     = str(args.flags, "token",      process.env.GITLAB_TOKEN       ?? "");
+    const projectId = str(args.flags, "project-id", process.env.GITLAB_PROJECT_ID  ?? "");
+    if (!token)     die("GitLab token required.");
+    if (!projectId) die("GitLab project ID required.");
+    connector = new GitLabConnector({ baseUrl, token, projectId });
+
+  } else {
+    die(`Unknown --connector "${connectorName}". Use "servicenow", "jira", or "gitlab".`);
+  }
+
+  console.log(`\n${c.bold("Mining tickets")}  connector: ${c.cyan(connectorName)}  limit: ${c.dim(String(limit))}  min-comments: ${c.dim(String(minComments))}${since ? `  since: ${since.toISOString()}` : ""}`);
+
+  const miner = new TicketMiner(connector, { outputDir, limit, minComments, since });
+  const result = await miner.mine();
+  printIngestResult(result, "Ticket Mining Summary");
+}
+
+// ---------------------------------------------------------------------------
+// import-url command
+// ---------------------------------------------------------------------------
+
+async function cmdImportUrl(args: ParsedArgs) {
+  const urls = args.positionals;
+  if (!urls.length) die("Usage: import-url <url1> [url2 ...] [options]");
+
+  const outputDir     = str(args.flags, "output", "knowledge");
+  const ignoreRobots  = bool(args.flags, "ignore-robots");
+  const timeoutMs     = num(args.flags, "timeout", 15_000);
+
+  console.log(`\n${c.bold("Scraping URLs")}  count: ${c.cyan(String(urls.length))}${ignoreRobots ? c.yellow("  --ignore-robots") : ""}`);
+  urls.forEach((u) => console.log(`  ${c.dim("·")} ${u}`));
+
+  const scraper = new UrlScraper({ outputDir, respectRobots: !ignoreRobots, timeoutMs });
+  const result = await scraper.scrape(urls);
+  printIngestResult(result, "URL Scrape Summary");
+}
+
+// ---------------------------------------------------------------------------
 // Entrypoint
 // ---------------------------------------------------------------------------
 
@@ -398,10 +596,13 @@ async function main() {
   const args = parseArgs(process.argv.slice(3));
 
   switch (command) {
-    case "index":  await cmdIndex(args);  break;
-    case "search": await cmdSearch(args); break;
-    case "run":    await cmdRun(args);    break;
-    case "watch":  await cmdWatch(args);  break;
+    case "index":        await cmdIndex(args);        break;
+    case "search":       await cmdSearch(args);       break;
+    case "run":          await cmdRun(args);          break;
+    case "watch":        await cmdWatch(args);        break;
+    case "import-wiki":  await cmdImportWiki(args);  break;
+    case "mine-tickets": await cmdMineTickets(args); break;
+    case "import-url":   await cmdImportUrl(args);   break;
     default:
       printHelp();
       if (command && command !== "--help" && command !== "-h") process.exit(1);
