@@ -9,7 +9,7 @@ TypeScript (Node 18+, ESM), LangGraph, LangChain, OpenAI, ChromaDB. No framework
 
 ## What it does
 
-Reads tickets from ServiceNow / Jira / GitLab, searches a RAG knowledge base, then decides: `automate` | `draft_response` | `escalate` | `needs_info`. One structured LLM call decides, then the agent executes deterministically. No open-ended tool loops.
+Reads tickets from ServiceNow / Jira / GitLab, searches a RAG knowledge base, then decides: `automate` | `draft_response` | `escalate` | `needs_info` | `implement`. One structured LLM call decides, then the agent executes deterministically. No open-ended tool loops. For bug/feature tickets, `implement` triggers the coding engine to write actual code changes.
 
 ## Agent flow (strict linear graph)
 
@@ -26,6 +26,10 @@ All ticketing systems implement `TicketConnector` from `src/connectors/connector
 Current connectors: `servicenow.ts`, `jira.ts`, `gitlab.ts`.
 
 `TicketStatus` is a strict union: `"open" | "in_progress" | "pending" | "resolved" | "closed"`. Every connector must map to these — never invent new values.
+
+## Code implementation engine
+
+`src/coder/` handles the `implement` decision. Multi-model: supports OpenAI (GPT), Anthropic (Claude), and Google (Gemini) via a `CodingModel` interface in `providers.ts`. The `Implementer` orchestrator gathers file context, asks the coding LLM for a structured edit plan (CREATE/MODIFY/DELETE blocks), applies edits, runs tests, and creates a git branch with the commit. Provider auto-detection from model name (e.g. `claude-*` → anthropic).
 
 ## Knowledge ingest pipeline
 
@@ -63,6 +67,9 @@ import assert from "node:assert/strict";
 | `src/rag/indexer.ts` | Chunk + embed + upsert to ChromaDB |
 | `src/rag/retriever.ts` | MMR / similarity search |
 | `src/ingest/types.ts` | htmlToMarkdown, slugify, writeIfChanged |
+| `src/coder/types.ts` | CodebaseConfig, CodingModel interface, FileEdit types |
+| `src/coder/providers.ts` | OpenAI / Anthropic / Google coding LLM wrappers |
+| `src/coder/implementer.ts` | Orchestrator: context → LLM → edits → tests → git |
 | `src/cli.ts` | All CLI commands |
 
 ## Environment

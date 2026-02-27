@@ -14,6 +14,7 @@ src/
   rag/                ChromaDB indexer and retriever
   agent/              LangGraph StateGraph + polling loop
   ingest/             Knowledge-base importers (Azure DevOps, Confluence, URL, ticket miner)
+  coder/              Code implementation engine (multi-model: OpenAI, Anthropic, Google)
   cli.ts              All CLI entry points
 knowledge/            Runbooks, SOPs, imported wiki/ticket articles
 ```
@@ -26,7 +27,9 @@ START → ingest → retrieve → decide → act → record → END
 
 The `decide` node makes **one** structured LLM call (Zod-validated output) and produces a decision + confidence score. The `act` node executes deterministically. No iterative tool loops.
 
-Decision types: `automate` | `draft_response` | `escalate` | `needs_info`.
+Decision types: `automate` | `draft_response` | `escalate` | `needs_info` | `implement`.
+
+The `implement` decision triggers the code implementation engine (`src/coder/`). It reads the relevant codebase, asks a coding LLM (Claude, GPT, Gemini) to plan and produce file edits, applies them, runs tests, and creates a git branch. Requires `--codebase` and `--coding-model` CLI flags.
 
 ## TicketConnector interface
 
@@ -66,7 +69,7 @@ npm run dev -- import-url https://...
 
 ## Environment variables
 
-`OPENAI_API_KEY` is always required. See `.env.example` for the full list (ServiceNow, Jira, GitLab, Azure DevOps, Confluence).
+`OPENAI_API_KEY` is always required. For the code implementation feature, also set `ANTHROPIC_API_KEY` or `GOOGLE_API_KEY` depending on which coding model you use. See `.env.example` for the full list.
 
 ---
 

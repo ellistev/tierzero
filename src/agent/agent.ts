@@ -18,6 +18,8 @@ import { KnowledgeRetriever } from "../rag/retriever";
 import type { Ticket, TicketComment } from "../connectors/types";
 import type { TicketConnector } from "../connectors/connector";
 import type { RetrievedChunk } from "../rag/retriever";
+import type { CodebaseConfig, CodingModel, ImplementationResult } from "../coder/types";
+import { Implementer, formatResultForTicket } from "../coder/implementer";
 
 // ---------------------------------------------------------------------------
 // Decision + Action types
@@ -27,7 +29,8 @@ export type AgentDecision =
   | "automate"        // agent resolves fully, no human required
   | "draft_response"  // agent knows the answer, posts it and closes (or waits for reporter confirmation)
   | "escalate"        // outside agent scope -- assign to a human team with context summary
-  | "needs_info";     // reporter hasn't provided enough detail -- ask a targeted clarifying question
+  | "needs_info"      // reporter hasn't provided enough detail -- ask a targeted clarifying question
+  | "implement";      // ticket is a bug/feature -- the agent will write code to fix/implement it
 
 /**
  * Discriminated union of every concrete action the agent can take.
@@ -39,6 +42,7 @@ export type AgentAction =
   | { type: "resolved"; resolution: string }
   | { type: "escalated"; assigneeId: string; assigneeName: string; reason: string }
   | { type: "requested_info"; commentId: string; question: string }
+  | { type: "implemented"; branch: string; commitHash: string; summary: string; testsPassed?: boolean }
   | { type: "no_action"; reason: string };
 
 // ---------------------------------------------------------------------------
@@ -146,7 +150,7 @@ const AgentStateAnnotation = Annotation.Root({
 
 // Structured output schema for the decide node
 const decisionOutputSchema = z.object({
-  decision: z.enum(["automate", "draft_response", "escalate", "needs_info"])
+  decision: z.enum(["automate", "draft_response", "escalate", "needs_info", "implement"])
     .describe("How to handle this ticket"),
   reasoning: z.string()
     .describe("Step-by-step reasoning for the decision"),
@@ -463,6 +467,18 @@ export interface AgentConfig {
    *   { networking: { sysId: "abc123", name: "Network Engineering" } }
    */
   escalationTeams?: Record<string, { sysId: string; name: string }>;
+  /**
+   * Registered codebases the agent can implement changes in.
+   * When the LLM decides "implement", the agent picks the matching
+   * codebase (by project key or first available) and writes code.
+   */
+  codebases?: CodebaseConfig[];
+  /**
+   * Coding LLM used for the "implement" decision. Required if any
+   * codebases are configured. Supports OpenAI, Anthropic (Claude),
+   * and Google (Gemini) models.
+   */
+  codingModel?: CodingModel;
 }
 
 // ---------------------------------------------------------------------------
@@ -480,12 +496,14 @@ export class AgentGraph {
       minConfidence: 0.4,
       dryRun: false,
       escalationTeams: {},
+      codebases: [],
+      codingModel: undefined as unknown as CodingModel,
       ...config,
     };
   }
 
   private buildGraph() {
-    const { deps, model, openAIApiKey, minConfidence, dryRun, escalationTeams } = this.cfg;
+    const { deps, model, openAIApiKey, minConfidence, dryRun, escalationTeams, codebases, codingModel } = this.cfg;
     type S = typeof AgentStateAnnotation.State;
     const now = () => new Date().toISOString();
 
@@ -536,15 +554,26 @@ export class AgentGraph {
             .map(c => `[${c.isInternal ? "internal" : "public"} | ${c.author.name}]\n${c.body}`)
             .join("\n\n---\n\n");
 
+      const hasCodebases = codebases && codebases.length > 0;
+      const implementLine = hasCodebases
+        ? `- "implement": This is a bug or feature request that needs code changes. A coding agent will write the fix/feature.\n`
+        : "";
+      const codebaseNote = hasCodebases
+        ? `\nAvailable codebases for implementation: ${codebases.map(c => c.name).join(", ")}.\n` +
+          `Choose "implement" when the ticket is a bug or feature that can be addressed by writing code.\n`
+        : "";
+
       const systemPrompt =
         `You are an AI IT operations agent that triages and resolves support tickets.\n\n` +
         `Classify each ticket into exactly one decision:\n` +
         `- "automate": A clear, complete resolution exists in the knowledge base. Draft the full solution.\n` +
         `- "draft_response": Useful guidance exists but resolution is uncertain. Draft a helpful reply.\n` +
         `- "escalate": Out of scope (physical access, policy decision, or low knowledge-base confidence).\n` +
-        `- "needs_info": Too vague to act on. Ask ONE specific clarifying question.\n\n` +
-        `Keep responses concise and actionable. Cite KB source files when used.\n` +
-        `Confidence below ${minConfidence} should default to "escalate".`;
+        `- "needs_info": Too vague to act on. Ask ONE specific clarifying question.\n` +
+        implementLine +
+        `\nKeep responses concise and actionable. Cite KB source files when used.\n` +
+        `Confidence below ${minConfidence} should default to "escalate".` +
+        codebaseNote;
 
       const userPrompt =
         `## Ticket\n` +
@@ -665,6 +694,58 @@ export class AgentGraph {
             return {
               actionTaken: { type: "requested_info", commentId, question: draftedReply },
               steps: [{ node: "act", summary: `Requested info, comment ${commentId}`, timestamp: now() }],
+            };
+          }
+
+          case "implement": {
+            if (!codebases?.length || !codingModel) {
+              return {
+                actionTaken: { type: "no_action", reason: "No codebases configured for implementation" },
+                steps: [{ node: "act", summary: "implement requested but no codebases configured — skipped", timestamp: now() }],
+              };
+            }
+
+            // Match codebase by ticket project key, or fall back to the first one
+            const codebase = codebases.find((cb) =>
+              cb.projectKeys?.some((k) =>
+                k.toLowerCase() === (ticket.project ?? "").toLowerCase() ||
+                k.toLowerCase() === ticket.source.toLowerCase()
+              )
+            ) ?? codebases[0];
+
+            const implementer = new Implementer(codebase, codingModel);
+            const implResult = await implementer.implement(ticket);
+
+            // Post the result as an internal note on the ticket
+            const resultComment = formatResultForTicket(implResult, codingModel.modelName);
+            await deps.connector.addComment(ticket.id, resultComment, { isInternal: true });
+
+            if (implResult.success) {
+              // Post a public comment summarizing what was done
+              const publicMsg =
+                `Code changes have been implemented on branch \`${implResult.branch}\`.\n\n` +
+                `${implResult.summary}\n\n` +
+                `${implResult.filesChanged.length} file(s) changed.` +
+                (implResult.testsPassed ? " All tests passing." : "");
+              await deps.connector.addComment(ticket.id, publicMsg, { isInternal: false });
+              await deps.connector.updateTicket(ticket.id, { status: "in_progress" });
+            }
+
+            return {
+              actionTaken: {
+                type: "implemented",
+                branch: implResult.branch ?? "",
+                commitHash: implResult.commitHash ?? "",
+                summary: implResult.summary,
+                testsPassed: implResult.testsPassed,
+              },
+              steps: [{
+                node: "act",
+                summary: implResult.success
+                  ? `Implemented on branch ${implResult.branch} (${implResult.commitHash}), tests: ${implResult.testsPassed ?? "not run"}`
+                  : `Implementation failed: ${implResult.error ?? "unknown error"}`,
+                timestamp: now(),
+              }],
             };
           }
 

@@ -12,6 +12,8 @@ import { ConfluenceImporter } from "./ingest/confluence";
 import { UrlScraper } from "./ingest/url-scraper";
 import { TicketMiner } from "./ingest/ticket-miner";
 import type { IngestResult } from "./ingest/types";
+import { createCodingModel, inferProvider } from "./coder/providers";
+import type { CodebaseConfig, CodingProvider } from "./coder/types";
 
 // ---------------------------------------------------------------------------
 // ANSI helpers -- minimal, no dependency
@@ -126,6 +128,15 @@ ${c.bold("run options (ServiceNow connector):")}
   --max-iterations <n>   Agent loop cap              ${c.dim("(default: 10)")}
   --dry-run              Log actions without executing them
 
+${c.bold("code implementation options (run / watch):")}
+  --codebase <path>      Path to repo the agent can code in
+  --codebase-name <n>    Name for the codebase       ${c.dim("(default: folder name)")}
+  --test-command <cmd>   Test command to run after edits ${c.dim("(e.g. 'npm test')")}
+  --branch-prefix <p>    Git branch prefix           ${c.dim("(default: tierzero/)")}
+  --coding-model <name>  Coding LLM model            ${c.dim("(e.g. claude-sonnet-4-20250514, gpt-4o)")}
+  --coding-provider <p>  Force provider              ${c.dim("(openai, anthropic, google — auto-detected)")}
+  --coding-api-key <k>   API key for coding LLM      ${c.dim("(falls back to provider env var)")}
+
 ${c.bold("watch options (continuous polling loop):")}
   --interval <s>         Poll interval in seconds    ${c.dim("(default: 60)")}
   --batch-size <n>       Max tickets per cycle       ${c.dim("(default: 0 = unlimited)")}
@@ -165,6 +176,44 @@ ${c.bold("import-url options:")}
   --ignore-robots        Skip robots.txt check
   --timeout <ms>         Fetch timeout               ${c.dim("(default: 15000)")}
 `);
+}
+
+// ---------------------------------------------------------------------------
+// Coder config helper (shared by run + watch)
+// ---------------------------------------------------------------------------
+
+function buildCoderConfig(flags: ParsedArgs["flags"]): { codebases: CodebaseConfig[]; codingModel: ReturnType<typeof createCodingModel> | undefined } {
+  const codebasePath = typeof flags["codebase"] === "string" ? flags["codebase"] : undefined;
+  if (!codebasePath) return { codebases: [], codingModel: undefined };
+
+  const absPath = path.resolve(codebasePath);
+  const codebaseName = str(flags, "codebase-name", path.basename(absPath));
+  const testCommand = typeof flags["test-command"] === "string" ? flags["test-command"] : undefined;
+  const branchPrefix = str(flags, "branch-prefix", "tierzero/");
+
+  const codebase: CodebaseConfig = {
+    name: codebaseName,
+    path: absPath,
+    testCommand,
+    branchPrefix,
+  };
+
+  const codingModelName = str(flags, "coding-model", "");
+  if (!codingModelName) die("--coding-model required when --codebase is set (e.g. claude-sonnet-4-20250514, gpt-4o)");
+
+  const providerStr = typeof flags["coding-provider"] === "string" ? flags["coding-provider"] : undefined;
+  const provider = (providerStr ?? inferProvider(codingModelName)) as CodingProvider | undefined;
+  if (!provider) die(`Cannot infer provider for model "${codingModelName}". Pass --coding-provider explicitly.`);
+
+  const apiKey = typeof flags["coding-api-key"] === "string" ? flags["coding-api-key"] : undefined;
+
+  const codingModel = createCodingModel({
+    provider,
+    model: codingModelName,
+    apiKey,
+  });
+
+  return { codebases: [codebase], codingModel };
 }
 
 // ---------------------------------------------------------------------------
@@ -317,14 +366,19 @@ async function cmdRun(args: ParsedArgs) {
   if (ticket.url) console.log(`${c.dim("URL:")} ${ticket.url}`);
   hr();
 
+  const { codebases, codingModel } = buildCoderConfig(args.flags);
+
   const agent = new AgentGraph({
     deps: { connector, retriever },
     model,
     maxIterations: maxIter,
     dryRun,
+    codebases,
+    codingModel: codingModel as any,
   });
 
   if (dryRun) console.log(c.yellow("  --dry-run: actions will be logged but not executed\n"));
+  if (codebases.length) console.log(`${c.bold("Codebase:")} ${c.cyan(codebases[0].name)} (${codebases[0].path})  coding model: ${c.dim(codingModel?.modelName ?? "none")}`);
 
   console.log(`${c.bold("Running agent")}  model: ${c.dim(model)}  max-iterations: ${c.dim(String(maxIter))}\n`);
 
@@ -337,6 +391,12 @@ async function cmdRun(args: ParsedArgs) {
     console.log(`  Confidence: ${finalState.confidence.toFixed(2)}`);
     if (finalState.actionTaken) {
       console.log(`  Action    : ${c.green(finalState.actionTaken.type)}`);
+      if (finalState.actionTaken.type === "implemented") {
+        const impl = finalState.actionTaken;
+        if (impl.branch) console.log(`  Branch    : ${c.cyan(impl.branch)}`);
+        if (impl.commitHash) console.log(`  Commit    : ${c.dim(impl.commitHash)}`);
+        if (impl.testsPassed !== undefined) console.log(`  Tests     : ${impl.testsPassed ? c.green("passed") : c.red("failed")}`);
+      }
     }
     if (finalState.error) {
       console.log(`  Error     : ${c.red(finalState.error)}`);
@@ -382,7 +442,8 @@ async function cmdWatch(args: ParsedArgs) {
 
   const connector = new ServiceNowConnector({ instanceUrl, username, password, table });
   const retriever = new KnowledgeRetriever({ collectionName: collection, chromaUrl });
-  const agent = new AgentGraph({ deps: { connector, retriever }, model, maxIterations: maxIter, dryRun });
+  const { codebases, codingModel } = buildCoderConfig(args.flags);
+  const agent = new AgentGraph({ deps: { connector, retriever }, model, maxIterations: maxIter, dryRun, codebases, codingModel: codingModel as any });
 
   let totalProcessed = 0;
 
