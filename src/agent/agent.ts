@@ -425,11 +425,14 @@ export function _applyConfidenceThreshold(
   reasoning: string,
   minConfidence: number
 ): { decision: AgentDecision; reasoning: string } {
-  const overridden = confidence < minConfidence && decision !== "escalate";
+  // Don't override "needs_info" -- low confidence IS the reason we're asking.
+  // Don't override "escalate" -- already the safest action.
+  const exempt = decision === "escalate" || decision === "needs_info";
+  const overridden = confidence < minConfidence && !exempt;
   return {
     decision: overridden ? "escalate" : decision,
     reasoning: overridden
-      ? `${reasoning}\n\n[Confidence ${confidence.toFixed(2)} below threshold ${minConfidence} — overriding to escalate]`
+      ? `${reasoning}\n\n[Confidence ${confidence.toFixed(2)} below threshold ${minConfidence} -- overriding to escalate]`
       : reasoning,
   };
 }
@@ -566,11 +569,16 @@ export class AgentGraph {
       const systemPrompt =
         `You are an AI IT operations agent that triages and resolves support tickets.\n\n` +
         `Classify each ticket into exactly one decision:\n` +
-        `- "automate": A clear, complete resolution exists in the knowledge base. Draft the full solution.\n` +
-        `- "draft_response": Useful guidance exists but resolution is uncertain. Draft a helpful reply.\n` +
-        `- "escalate": Out of scope (physical access, policy decision, or low knowledge-base confidence).\n` +
+        `- "automate": A clear, complete, SAFE resolution exists in the knowledge base. Draft the full solution.\n` +
+        `- "draft_response": Useful guidance exists but resolution is uncertain, or the reporter already tried the standard fix. Draft a helpful reply with next steps.\n` +
+        `- "escalate": Out of scope (physical access, policy decision, low confidence, or SAFETY-SENSITIVE operations).\n` +
         `- "needs_info": Too vague to act on. Ask ONE specific clarifying question.\n` +
         implementLine +
+        `\n## Safety Rules (MUST follow)\n` +
+        `1. ALWAYS escalate security incidents (breaches, suspicious logins, compromised accounts) to the security team. NEVER auto-resolve.\n` +
+        `2. ALWAYS escalate service account changes, production system modifications, and anything marked CRITICAL in the KB. These require human oversight.\n` +
+        `3. If the KB says "do NOT" do something without preconditions (maintenance windows, approvals, dependency checks), escalate -- do not provide the steps for the user to self-serve.\n` +
+        `4. Read the FULL comment thread. If the reporter already tried the KB solution, do NOT suggest it again. Use "draft_response" with next-level troubleshooting or escalate.\n` +
         `\nKeep responses concise and actionable. Cite KB source files when used.\n` +
         `Confidence below ${minConfidence} should default to "escalate".` +
         codebaseNote;

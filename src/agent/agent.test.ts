@@ -131,12 +131,23 @@ describe("_applyConfidenceThreshold", () => {
     assert.ok(result.reasoning.includes("0.20"));
   });
 
-  test("all four decision types can be overridden (except escalate)", () => {
-    const decisions = ["automate", "draft_response", "needs_info"] as const;
-    for (const d of decisions) {
+  test("automate and draft_response can be overridden; needs_info and escalate are exempt", () => {
+    const overridable = ["automate", "draft_response"] as const;
+    for (const d of overridable) {
       const r = _applyConfidenceThreshold(d, 0.1, "r", 0.4);
       assert.equal(r.decision, "escalate", `${d} should be overridden`);
     }
+  });
+
+  test("needs_info is exempt from confidence override", () => {
+    const r = _applyConfidenceThreshold("needs_info", 0.1, "too vague", 0.4);
+    assert.equal(r.decision, "needs_info", "needs_info should NOT be overridden");
+    assert.ok(!r.reasoning.includes("overriding"), "reasoning should not mention override");
+  });
+
+  test("implement can be overridden by low confidence", () => {
+    const r = _applyConfidenceThreshold("implement", 0.2, "maybe code fix", 0.4);
+    assert.equal(r.decision, "escalate", "implement should be overridden at low confidence");
   });
 });
 
