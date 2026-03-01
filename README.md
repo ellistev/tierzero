@@ -1,6 +1,6 @@
 # TierZero
 
-AI-powered IT ticket resolution. Reads tickets, searches your runbooks, resolves or escalates -- no human in the loop.
+AI-powered IT ticket resolution. Reads tickets, searches your runbooks, resolves or escalates - no human in the loop.
 
 > **Tier 0** is the support level below Tier 1. Fully automated. No queue. No waiting.
 
@@ -8,43 +8,63 @@ Built with **LangGraph** + **LangChain** + **ChromaDB** + **OpenAI**.
 
 ---
 
-## Why
+## The Problem
 
-Your L1 team spends 70% of their time on tickets that already have a documented fix. Password resets, VPN issues, disk cleanup -- the runbook exists, someone just has to read it and follow the steps.
+Your L1 team spends 70% of their time on tickets that already have a documented fix. Password resets, VPN issues, printer jams - the runbook exists, someone just has to read it and follow the steps.
 
 TierZero does that automatically:
 1. Reads the ticket from ServiceNow, Jira, or GitLab
-2. Searches your knowledge base for the relevant procedure
+2. Searches your knowledge base (RAG) for the relevant procedure
 3. Either resolves it, asks a clarifying question, or escalates with full context
 
-Every action is auditable. Every decision includes reasoning. Confidence below threshold = automatic escalation to a human. The agent knows what it doesn't know.
+Every action is auditable. Every decision includes reasoning and a confidence score. The agent knows what it doesn't know.
 
 ---
 
-## How it works
+## Architecture
 
 ```
-Ticket arrives (ServiceNow / Jira / GitLab)
-     |
-     v
-[ingest]    Load full comment thread from connector
-     |
-     v
-[retrieve]  RAG search the knowledge/ folder (MMR, top-K chunks)
-     |
-     v
-[decide]    Structured LLM call -> decision + reasoning + confidence score
-     |
-     |-- automate       -> post resolution, mark resolved
-     |-- draft_response -> post helpful reply, wait for confirmation
-     |-- escalate       -> internal note with full context, reassign to human
-     '-- needs_info     -> ask reporter one specific clarifying question
-     |
-     v
-[record]    Internal audit note: decision, KB sources, step log
+                         +------------------+
+                         |   Ticket Source   |
+                         | ServiceNow/Jira/ |
+                         |     GitLab       |
+                         +--------+---------+
+                                  |
+                                  v
++----------+   +-----------+   +----------+   +-------+   +----------+
+|          |   |           |   |          |   |       |   |          |
+|  ingest  +-->+  retrieve +-->+  decide  +-->+  act  +-->+  record  |
+|          |   |           |   |          |   |       |   |          |
++----------+   +-----+-----+   +----+-----+   +---+---+   +----------+
+                     |              |               |
+                     v              v               v
+               +-----------+  +---------+    +-------------+
+               |  ChromaDB |  |  GPT-4o |    |  Connector  |
+               |  (RAG)    |  |  (LLM)  |    |  (actions)  |
+               +-----------+  +---------+    +-------------+
 ```
 
-**No open-ended tool loops.** The agent plans once (structured output with confidence score) then executes deterministically. Every run leaves a traceable internal note.
+**No open-ended tool loops.** The agent plans once (structured LLM output with confidence score) then executes deterministically. Every run produces an internal audit trail.
+
+### Decision types
+
+| Decision | When | Action |
+|---|---|---|
+| `automate` | Clear, safe KB match | Post resolution, mark resolved |
+| `draft_response` | Partial match or reporter already tried standard fix | Post helpful reply with next steps |
+| `escalate` | Out of scope, safety-sensitive, or low confidence | Internal note + reassign to human team |
+| `needs_info` | Too vague to act on | Ask one specific clarifying question |
+| `implement` | Bug or feature with codebase access | Write code, create branch, run tests |
+
+### Safety rails
+
+The agent won't blindly auto-resolve everything it finds a KB match for:
+
+- **Security incidents** (suspicious logins, breaches) always escalate to security team
+- **Service account changes** and production-critical operations always escalate for human oversight
+- **KB warnings** ("do NOT do this without...") are respected - the agent won't hand dangerous steps to a user
+- **Already-tried fixes** are detected from the comment thread - no repeating what the user already did
+- **Confidence threshold** with intelligent exemptions - `needs_info` isn't overridden (low confidence IS the reason you're asking)
 
 ---
 
@@ -61,29 +81,60 @@ npm install
 cp .env.example .env   # add your OPENAI_API_KEY
 
 # Index your runbooks
-npm run index -- knowledge/
+npx tsx src/cli.ts index ./knowledge/
 
 # Test retrieval
-npm run dev -- search "password reset procedure"
+npx tsx src/cli.ts search "password reset procedure"
 
-# Run on a real ticket (dry run)
-npm run run-agent -- INC0012345 \
-  --connector servicenow \
+# Run on a real ticket (dry run first)
+npx tsx src/cli.ts run INC0012345 \
   --instance-url https://myco.service-now.com \
+  --username svc-agent \
+  --password secret \
   --dry-run
 ```
 
 ---
 
+## Real test results
+
+14 end-to-end integration tests against live GPT-4o-mini + ChromaDB with a sample IT knowledge base:
+
+```
+T01 VPN timeout - exact KB match.................. PASS (automate, 0.90)
+T02 Shared mailbox access request................. PASS (automate, 0.99)
+T03 Print jobs stuck in queue..................... PASS (automate, 0.85)
+T04 Password reset request........................ PASS (automate, 0.95)
+T05 VPN cert expired - different symptom.......... PASS (draft_response, 0.80)
+T06 MFA reset needed.............................. PASS (automate, 0.90)
+T07 Emails not arriving from sender............... PASS (draft_response, 0.80)
+T08 Physical hardware - server room AC............ PASS (escalate, 0.90)
+T09 Budget approval - not IT operational.......... PASS (escalate, 0.80)
+T10 Security incident - data breach............... PASS (escalate, 0.90)
+T11 Completely vague ticket....................... PASS (needs_info, 0.20)
+T12 Vague with some context...................... PASS (needs_info, 0.50)
+T13 Prior troubleshooting in comments............. PASS (draft_response, 0.70)
+T14 Service account password (dangerous).......... PASS (escalate, 0.90)
+
+Results: 14 passed  0 failed
+```
+
+The agent correctly:
+- Auto-resolves common issues it has documented procedures for
+- Asks clarifying questions when tickets are too vague
+- Escalates physical problems, security incidents, and dangerous operations
+- Avoids repeating fixes the user already tried (reads comment threads)
+
+---
+
 ## Connectors
 
-TierZero ships with three connectors. Each implements the same `TicketConnector` interface -- swap between them with a flag.
+Three connectors ship out of the box. Each implements `TicketConnector` - swap with a flag.
 
 ### ServiceNow
 
 ```bash
-npm run run-agent -- INC0012345 \
-  --connector servicenow \
+npx tsx src/cli.ts run INC0012345 \
   --instance-url https://myco.service-now.com \
   --username svc-agent \
   --password secret
@@ -94,88 +145,80 @@ Full Table API adapter: incidents, comments (public + work notes), attachments, 
 ### Jira
 
 ```bash
-npm run run-agent -- PROJ-1234 \
-  --connector jira \
-  --base-url https://myco.atlassian.net \
-  --email agent@myco.com \
-  --api-token secret \
-  --project-key PROJ
+npx tsx src/cli.ts run PROJ-1234 \
+  --instance-url https://myco.atlassian.net \
+  --username agent@myco.com \
+  --password api-token \
+  --table jira
 ```
 
-Jira Cloud REST API v3. Maps ADF (Atlassian Document Format) to plain text. Handles transitions for status changes with configurable transition name matching.
+Jira Cloud REST API v3. Maps ADF to plain text. Handles transitions for status changes.
 
 ### GitLab
 
 ```bash
-npm run run-agent -- 42 \
-  --connector gitlab \
-  --base-url https://gitlab.myco.com \
-  --token glpat-xxxx \
-  --project-id 123
+npx tsx src/cli.ts run 42 \
+  --instance-url https://gitlab.myco.com \
+  --username token \
+  --password glpat-xxxx \
+  --table gitlab
 ```
 
-GitLab Issues API. Maps labels to priority/status (configurable). Handles scoped labels (`priority::high`, `status::pending`).
+GitLab Issues API. Maps labels to priority/status. Handles scoped labels (`priority::high`).
 
 ---
 
 ## Knowledge ingestion
 
-Drop files in `knowledge/` manually, or pull from your existing sources:
+Drop markdown files in a folder, or pull from existing sources:
 
-### Local files
+### Index local files
 
 ```bash
-npm run index -- knowledge/
-npm run index -- knowledge/ --force          # re-index everything
-npm run index -- knowledge/ --stats          # check what's indexed
-npm run index -- knowledge/ --chunk-size 800 # tune chunking
+npx tsx src/cli.ts index ./knowledge/
+npx tsx src/cli.ts index ./knowledge/ --force          # re-index everything
+npx tsx src/cli.ts index ./knowledge/ --stats          # check what's indexed
+npx tsx src/cli.ts index ./knowledge/ --chunk-size 800 # tune chunking
 ```
 
-Supports `.md`, `.txt`, `.json`, `.pdf`. Language-aware chunking with configurable size and overlap. SHA-256 change detection skips unchanged files on re-index.
+Supports `.md`, `.txt`, `.json`. Language-aware chunking with configurable size and overlap. SHA-256 change detection skips unchanged files.
 
 ### Azure DevOps wikis + work items
 
 ```bash
-npm run dev -- import-wiki \
+npx tsx src/cli.ts import-wiki \
   --source azuredevops \
   --org myorg \
   --project MyProject \
   --token $AZUREDEVOPS_TOKEN \
-  --mode both            # wiki | workitems | both
+  --mode both
 ```
-
-Imports wiki pages as markdown and mines resolved work items (bugs, incidents) into knowledge articles.
 
 ### Confluence
 
 ```bash
-npm run dev -- import-wiki \
+npx tsx src/cli.ts import-wiki \
   --source confluence \
   --base-url https://myco.atlassian.net/wiki \
   --email admin@myco.com \
   --api-token secret \
-  --space-key IT,OPS      # comma-separated, or omit for all spaces
+  --space-key IT,OPS
 ```
-
-Paginates through spaces and pages. Converts Confluence storage format to markdown.
 
 ### URL scraping
 
 ```bash
-npm run dev -- import-url \
-  https://docs.myco.com/runbooks/password-reset \
+npx tsx src/cli.ts import-url \
   https://docs.myco.com/runbooks/vpn-setup \
   --output knowledge/scraped
 ```
-
-Fetches pages, converts HTML to markdown, respects robots.txt (override with `--ignore-robots`).
 
 ### Ticket mining
 
 Turn your resolved tickets into knowledge articles:
 
 ```bash
-npm run dev -- mine-tickets \
+npx tsx src/cli.ts mine-tickets \
   --connector servicenow \
   --instance-url https://myco.service-now.com \
   --limit 200 \
@@ -183,7 +226,32 @@ npm run dev -- mine-tickets \
   --since 2025-01-01
 ```
 
-Works with all three connectors. Filters by resolution date and comment quality. Each ticket becomes a structured markdown article with problem description, resolution thread, and metadata.
+Works with all three connectors. Each resolved ticket becomes a structured knowledge article.
+
+---
+
+## Code implementation
+
+TierZero can write code to fix bugs or implement features:
+
+```bash
+npx tsx src/cli.ts run BUG-1234 \
+  --instance-url https://myco.service-now.com \
+  --username svc-agent \
+  --password secret \
+  --codebase ./my-project \
+  --coding-model claude-sonnet-4-20250514 \
+  --test-command "npm test"
+```
+
+The agent:
+1. Reads the ticket and KB for context
+2. Decides `implement` if it's a code-fixable bug/feature
+3. Creates a branch, reads relevant files, writes the fix
+4. Runs your test suite to verify
+5. Posts results back to the ticket
+
+Supports **OpenAI**, **Anthropic (Claude)**, and **Google (Gemini)** as coding models.
 
 ---
 
@@ -192,26 +260,16 @@ Works with all three connectors. Filters by resolution date and comment quality.
 Watch for new tickets and process them automatically:
 
 ```bash
-npm run dev -- watch \
-  --connector servicenow \
+npx tsx src/cli.ts watch \
   --instance-url https://myco.service-now.com \
+  --username svc-agent \
+  --password secret \
   --interval 60 \
   --batch-size 5 \
   --dry-run
 ```
 
-Polls for open tickets on a configurable interval. Deduplicates across cycles. Batch size caps per-cycle work so a large backlog doesn't block the loop.
-
----
-
-## Test retrieval
-
-Search without running the full agent:
-
-```bash
-npm run dev -- search "VPN not connecting" --k 3
-npm run dev -- search "disk full" --mmr --folder runbooks/
-```
+Polls on a configurable interval. Deduplicates across cycles. Batch size caps per-cycle work.
 
 ---
 
@@ -219,71 +277,36 @@ npm run dev -- search "disk full" --mmr --folder runbooks/
 
 ```
 src/
-  connectors/
-    types.ts              Generic Ticket / Comment / Attachment types
-    connector.ts          TicketConnector interface
-    servicenow.ts         ServiceNow Table API adapter
-    jira.ts               Jira Cloud REST API adapter
-    gitlab.ts             GitLab Issues API adapter
-  rag/
-    indexer.ts            Chunk, embed, upsert (SHA-256 change detection)
-    retriever.ts          Similarity + MMR search, metadata filters
   agent/
-    agent.ts              LangGraph StateGraph, typed state, 7 tools
-    poller.ts             Continuous polling loop with dedup + batching
+    agent.ts              LangGraph StateGraph - the brain
+    poller.ts             Continuous polling loop with dedup
+  connectors/
+    connector.ts          TicketConnector interface
+    servicenow.ts         ServiceNow Table API
+    jira.ts               Jira Cloud REST API
+    gitlab.ts             GitLab Issues API
+  rag/
+    indexer.ts            Chunk, embed, upsert to ChromaDB
+    retriever.ts          Similarity + MMR search
   ingest/
-    types.ts              Shared ingest types + idempotent file writer
     azure-devops.ts       AzDO wiki + work item importer
-    confluence.ts         Confluence space/page importer
-    url-scraper.ts        HTML -> markdown scraper with robots.txt
-    ticket-miner.ts       Resolved ticket -> knowledge article miner
+    confluence.ts         Confluence importer
+    url-scraper.ts        HTML -> markdown scraper
+    ticket-miner.ts       Resolved ticket -> KB article
+  coder/
+    implementer.ts        Code generation + git workflow
+    file-context.ts       Smart file selection for LLM context
+    providers.ts          Multi-provider LLM factory
   cli.ts                  CLI entry point
-knowledge/                Your runbooks, SOPs, and docs
 ```
-
----
-
-## Adding a connector
-
-1. Implement `TicketConnector` from `src/connectors/connector.ts`
-2. Pass it as `deps.connector` when constructing `AgentGraph`
-
-The interface covers: `listTickets`, `getTicket`, `getComments`, `addComment`, `listAttachments`, `downloadAttachment`, `uploadAttachment`, `updateTicket`.
-
----
-
-## Environment variables
-
-| Variable | Required | Description |
-|---|---|---|
-| `OPENAI_API_KEY` | Yes | OpenAI API key |
-| **ServiceNow** | | |
-| `SERVICENOW_INSTANCE_URL` | For SN | e.g. `https://myco.service-now.com` |
-| `SERVICENOW_USERNAME` | For SN | Username |
-| `SERVICENOW_PASSWORD` | For SN | Password |
-| **Jira** | | |
-| `JIRA_BASE_URL` | For Jira | e.g. `https://myco.atlassian.net` |
-| `JIRA_EMAIL` | For Jira | Atlassian account email |
-| `JIRA_API_TOKEN` | For Jira | API token |
-| **GitLab** | | |
-| `GITLAB_BASE_URL` | For GL | e.g. `https://gitlab.myco.com` |
-| `GITLAB_TOKEN` | For GL | Personal or project access token |
-| **Azure DevOps** | | |
-| `AZUREDEVOPS_ORG` | For import | Organization name |
-| `AZUREDEVOPS_PROJECT` | For import | Project name |
-| `AZUREDEVOPS_TOKEN` | For import | PAT |
-| **Confluence** | | |
-| `CONFLUENCE_BASE_URL` | For import | e.g. `https://myco.atlassian.net/wiki` |
-| `CONFLUENCE_EMAIL` | For import | Atlassian account email |
-| `CONFLUENCE_API_TOKEN` | For import | API token |
 
 ---
 
 ## Testing
 
 ```bash
-npm test        # 271 unit tests, ~1.3s
-npm run typecheck  # TypeScript strict mode
+npm test           # 321 unit tests, ~1.3s
+npx tsc --noEmit   # TypeScript strict mode, zero errors
 ```
 
 ---
@@ -295,10 +318,10 @@ npm run typecheck  # TypeScript strict mode
 | Agent orchestration | LangGraph (StateGraph) |
 | LLM + embeddings | OpenAI via LangChain |
 | Vector store | ChromaDB |
-| Text splitting | LangChain (language-aware) |
 | Connectors | ServiceNow, Jira, GitLab |
 | Knowledge ingestion | Azure DevOps, Confluence, URL scraping, ticket mining |
-| Runtime | Node 18+ / tsx |
+| Code implementation | OpenAI, Anthropic, Google (multi-provider) |
+| Runtime | Node 20+ / TypeScript |
 
 ---
 
