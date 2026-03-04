@@ -20,7 +20,10 @@ cp .env.example .env
 You have four ways to populate `knowledge/`:
 
 **Option A — Drop files manually**
-Copy any `.md`, `.txt`, `.pdf` runbooks into `knowledge/` and run index.
+Copy any `.md`, `.txt`, `.pdf` runbooks into `knowledge/` then index them:
+```bash
+npm run index -- knowledge/
+```
 
 **Option B — Pull from Azure DevOps** (your priority use case)
 ```bash

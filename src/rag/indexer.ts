@@ -9,12 +9,13 @@ import { Chroma } from "@langchain/community/vectorstores/chroma";
 import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf";
 import type { Document } from "@langchain/core/documents";
 import type { Where } from "chromadb";
+import { htmlToMarkdown } from "../ingest/types.js";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export type FileType = "markdown" | "text" | "json" | "pdf";
+export type FileType = "markdown" | "text" | "json" | "pdf" | "csv" | "yaml" | "html" | "xml";
 
 export interface IndexerConfig {
   /** Absolute path to the folder of documents to index */
@@ -70,6 +71,12 @@ const EXT_TO_TYPE: Record<string, FileType> = {
   ".text": "text",
   ".json": "json",
   ".pdf": "pdf",
+  ".csv": "csv",
+  ".yml": "yaml",
+  ".yaml": "yaml",
+  ".html": "html",
+  ".htm": "html",
+  ".xml": "xml",
 };
 
 const STATE_FILENAME = ".index-state.json";
@@ -128,12 +135,22 @@ async function loadPdf(absPath: string): Promise<Document[]> {
   return loader.load();
 }
 
+async function loadHtml(absPath: string): Promise<Document[]> {
+  const raw = await fs.readFile(absPath, "utf-8");
+  const content = htmlToMarkdown(raw);
+  return [{ pageContent: content, metadata: { source: absPath } }];
+}
+
 async function loadFile(absPath: string, fileType: FileType): Promise<Document[]> {
   switch (fileType) {
     case "markdown": return loadMarkdownOrText(absPath);
     case "text":     return loadMarkdownOrText(absPath);
     case "json":     return loadJson(absPath);
     case "pdf":      return loadPdf(absPath);
+    case "csv":      return loadMarkdownOrText(absPath);
+    case "yaml":     return loadMarkdownOrText(absPath);
+    case "html":     return loadHtml(absPath);
+    case "xml":      return loadMarkdownOrText(absPath);
   }
 }
 
@@ -142,9 +159,24 @@ async function loadFile(absPath: string, fileType: FileType): Promise<Document[]
 // ---------------------------------------------------------------------------
 
 function makeSplitter(fileType: FileType, chunkSize: number, chunkOverlap: number) {
-  if (fileType === "markdown") {
+  if (fileType === "markdown" || fileType === "html") {
     // MarkdownTextSplitter respects headers as natural split boundaries
+    // HTML is converted to markdown before splitting
     return new MarkdownTextSplitter({ chunkSize, chunkOverlap });
+  }
+  if (fileType === "yaml") {
+    // Split on YAML document boundaries first, then blank lines
+    return new RecursiveCharacterTextSplitter({
+      chunkSize, chunkOverlap,
+      separators: ["\n---\n", "\n\n", "\n", " ", ""],
+    });
+  }
+  if (fileType === "xml") {
+    // Split between closing/opening tags to avoid mid-element breaks
+    return new RecursiveCharacterTextSplitter({
+      chunkSize, chunkOverlap,
+      separators: [">\n<", ">\n", "\n\n", "\n", " ", ""],
+    });
   }
   return new RecursiveCharacterTextSplitter({ chunkSize, chunkOverlap });
 }
