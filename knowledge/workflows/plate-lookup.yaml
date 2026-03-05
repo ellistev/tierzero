@@ -1,0 +1,57 @@
+# Workflow Definition: SGI Plate Number Lookup
+id: plate-lookup
+name: SGI Plate Number Lookup
+version: "1.0"
+
+trigger:
+  keywords:
+    - "plate number"
+    - "plate lookup"
+    - "find plate"
+    - "what plate"
+  required_fields:
+    - description_matches: '\b\d{7,}\b'  # job number
+
+steps:
+  - name: extract-job-number
+    type: parse
+    source: ticket.description
+    pattern: '\b(\d{7,})\b'
+    output: job_number
+
+  - name: query-app-insights
+    type: kql
+    template: job-to-transaction
+    input: job_number
+    output: registration_transaction_id
+
+  - name: search-transaction
+    type: browser-search
+    page: data-explorer
+    stream_type: poc46/registration-transaction
+    stream_id: registration_transaction_id
+
+  - name: extract-plate-guid
+    type: browser-expand
+    event: baseline-registration-attributes-set
+    extract: '"registrationPlate"\s*:\s*"([a-f0-9-]{36})"'
+    output: plate_guid
+    fallback: extract-plate-direct
+
+  - name: lookup-plate-stream
+    type: browser-search
+    page: data-explorer
+    stream_type: poc46/registration-plate
+    stream_id: plate_guid
+    extract: '"plateNumber"\s*:\s*"([^"]+)"'
+    output: plate_number
+
+  - name: extract-plate-direct
+    type: browser-expand
+    event: registration-plate-attribute-set
+    extract: '"plateSearchValue"\s*:\s*"([^"]+)"'
+    output: plate_number
+
+  - name: update-ticket
+    type: servicenow-comment
+    message: "Plate lookup results:\n- Job: {job_number}\n- RegTxId: {registration_transaction_id}\n- Plate: {plate_number}"

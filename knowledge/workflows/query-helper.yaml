@@ -1,0 +1,42 @@
+# Workflow Definition: SGI ID Cross-Reference
+id: query-helper
+name: SGI ID Lookup / Query Helper
+version: "1.0"
+
+trigger:
+  keywords:
+    - "look up"
+    - "lookup"
+    - "find"
+    - "transaction id"
+    - "registration id"
+    - "what is the"
+  required_fields:
+    - description_matches: '(\d{7,}|reg[-\s]?\d+)'  # job number or registration ID
+
+steps:
+  - name: detect-query-type
+    type: parse
+    source: ticket.description
+    rules:
+      - pattern: '\b(\d{7,})\b'
+        output: job_number
+        query_type: job-to-transaction
+      - pattern: 'reg(?:istration)?[-\s]*(?:id)?[-\s:]*([a-f0-9-]{10,})'
+        output: registration_id
+        query_type: reg-to-transaction
+
+  - name: query-app-insights
+    type: kql
+    template: "{query_type}"
+    input: "{job_number || registration_id}"
+    output: result
+
+  - name: update-ticket
+    type: servicenow-comment
+    message: |
+      ID Lookup Results:
+      - Input: {input}
+      - RegistrationTransactionId: {result.registration_transaction_id}
+      - TransactionType: {result.transaction_type}
+      - Time: {result.time}
