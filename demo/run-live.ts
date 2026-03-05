@@ -9,6 +9,8 @@
  *   npm run live -- --demo sgi           # full execution
  *   npm run live -- --demo sgi --dry-run # dry-run
  *   npm run live -- --demo sgi --gather-only
+ *   npm run live -- --demo sgi --resume       # resume unprocessed items from gather log
+ *   npm run live -- --demo sgi --update-only  # post ServiceNow comments for completed items
  */
 
 import "dotenv/config";
@@ -54,8 +56,6 @@ const logger: WorkflowLogger = {
 // ---------------------------------------------------------------------------
 
 function parseSimpleYaml(text: string): Record<string, unknown> {
-  // For demo config, we just need key-value pairs and nested objects
-  // Use a real YAML parser in production
   const lines = text.split("\n");
   const result: Record<string, unknown> = {};
   let currentSection = "";
@@ -78,7 +78,6 @@ function parseSimpleYaml(text: string): Record<string, unknown> {
       const [key, ...valueParts] = content.split(": ");
       let value: unknown = valueParts.join(": ").replace(/^["']|["']$/g, "");
 
-      // Resolve env var references
       if (typeof value === "string") {
         const envMatch = (value as string).match(/^\$\{(\w+)\}$/);
         if (envMatch && process.env[envMatch[1]]) {
@@ -100,6 +99,59 @@ function parseSimpleYaml(text: string): Record<string, unknown> {
 }
 
 // ---------------------------------------------------------------------------
+// Gather log helpers
+// ---------------------------------------------------------------------------
+
+interface GatherLogItem {
+  id: string;
+  title: string;
+  executor: string | null;
+  decision: string;
+  ticket: Ticket;
+  processedStatus?: "success" | "failed" | "skipped";
+  processedAt?: string;
+  snowUpdated?: boolean;
+  snowUpdatedAt?: string;
+  alreadyFixed?: boolean;
+  ticketComment?: string;
+  commentIsInternal?: boolean;
+  error?: string;
+}
+
+interface GatherLog {
+  timestamp: string;
+  demo: string;
+  mode: string;
+  items: GatherLogItem[];
+}
+
+function getGatherLogPath(workDir: string, date?: string): string {
+  const d = date ?? new Date().toISOString().slice(0, 10);
+  return path.join(workDir, `tierzero-${d}.json`);
+}
+
+function saveGatherLog(logPath: string, log: GatherLog): void {
+  fs.writeFileSync(logPath, JSON.stringify(log, null, 2));
+}
+
+function loadLatestGatherLog(workDir: string): { log: GatherLog; logPath: string } | null {
+  // Try today first, then scan for most recent
+  const today = getGatherLogPath(workDir);
+  if (fs.existsSync(today)) {
+    return { log: JSON.parse(fs.readFileSync(today, "utf-8")), logPath: today };
+  }
+
+  const files = fs.readdirSync(workDir)
+    .filter(f => f.startsWith("tierzero-") && f.endsWith(".json"))
+    .sort()
+    .reverse();
+
+  if (files.length === 0) return null;
+  const logPath = path.join(workDir, files[0]);
+  return { log: JSON.parse(fs.readFileSync(logPath, "utf-8")), logPath };
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -107,11 +159,13 @@ async function main() {
   const args = process.argv.slice(2);
   const dryRun = args.includes("--dry-run");
   const gatherOnly = args.includes("--gather-only");
+  const resumeMode = args.includes("--resume");
+  const updateOnly = args.includes("--update-only");
   const demoIdx = args.indexOf("--demo");
   const demoName = demoIdx >= 0 ? args[demoIdx + 1] : null;
 
   if (!demoName) {
-    console.error("Usage: tsx demo/run-live.ts --demo <name> [--dry-run] [--gather-only]");
+    console.error("Usage: tsx demo/run-live.ts --demo <name> [--dry-run] [--gather-only] [--resume] [--update-only]");
     console.error("  e.g. tsx demo/run-live.ts --demo sgi");
     process.exit(1);
   }
@@ -137,11 +191,9 @@ async function main() {
     }
   }
 
-  // Load env section from config
   const configRaw = fs.readFileSync(configPath, "utf-8");
   const config = parseSimpleYaml(configRaw);
 
-  // Apply env defaults from config
   if (config.env && typeof config.env === "object") {
     for (const [key, value] of Object.entries(config.env as Record<string, string>)) {
       if (!process.env[key]) process.env[key] = value;
@@ -152,28 +204,24 @@ async function main() {
   if (!fs.existsSync(workDir)) fs.mkdirSync(workDir, { recursive: true });
 
   // ── CQRS/ES Infrastructure ──────────────────────────────────
-  // Event factory maps event type strings to domain event constructors
   const allEventClasses: Record<string, { prototype: unknown }> = {};
-  for (const [type, fromObj] of Object.entries(ticketEventFactories)) {
-    // Create a class-like object that defaultEventFactory can use
+  for (const [type] of Object.entries(ticketEventFactories)) {
     const cls = function() {} as unknown as { type: string; prototype: unknown };
     cls.prototype = {};
     allEventClasses[type] = cls;
   }
-  for (const [type, fromObj] of Object.entries(workflowExecutionEventFactories)) {
+  for (const [type] of Object.entries(workflowExecutionEventFactories)) {
     const cls = function() {} as unknown as { type: string; prototype: unknown };
     cls.prototype = {};
     allEventClasses[type] = cls;
   }
-  // For now, event factory just assigns prototype (Adaptech pattern)
   const eventFactory = defaultEventFactory(allEventClasses);
-  // Command handler will be wired up when the full infra bootstrap is implemented
-  // For now, we pass a placeholder that can be connected later
   const cqrsCommandHandler = undefined;
 
+  const modeLabel = dryRun ? "DRY RUN" : gatherOnly ? "GATHER ONLY" : resumeMode ? "RESUME" : updateOnly ? "UPDATE ONLY" : "LIVE EXECUTION";
   banner(`TierZero LIVE - ${(config as Record<string, unknown>).name || demoName}`);
   console.log(`  ${c.bold("Demo:")}  ${demoName} (${demoDir})`);
-  console.log(`  ${c.bold("Mode:")}  ${dryRun ? c.yellow("DRY RUN") : gatherOnly ? c.yellow("GATHER ONLY") : c.green("LIVE EXECUTION")}`);
+  console.log(`  ${c.bold("Mode:")}  ${dryRun ? c.yellow(modeLabel) : modeLabel === "LIVE EXECUTION" ? c.green(modeLabel) : c.yellow(modeLabel)}`);
 
   // ── Step 1: Load Skills ───────────────────────────────────────
   banner("Step 1: Loading Skills");
@@ -182,8 +230,8 @@ async function main() {
 
   const skillLoader = new SkillLoader({
     skillDirs: [
-      path.join(projectRoot, "skills"),        // Bundled skills
-      path.join(demoDir, "skills"),             // Demo-specific skills
+      path.join(projectRoot, "skills"),
+      path.join(demoDir, "skills"),
     ],
     config: skillConfig,
     logger,
@@ -215,6 +263,181 @@ async function main() {
   const browser = await connectChrome();
   console.log(`  ${c.green("OK")} Connected to Chrome (CDP)`);
 
+  // ---------------------------------------------------------------------------
+  // --update-only mode: post ServiceNow comments for completed items
+  // ---------------------------------------------------------------------------
+  if (updateOnly) {
+    banner("Update-Only Mode: Posting ServiceNow Comments");
+
+    const latest = loadLatestGatherLog(workDir);
+    if (!latest) {
+      console.error(`  ${c.red("X")} No gather log found in ${workDir}`);
+      process.exit(1);
+    }
+
+    const { log: gatherLog, logPath } = latest;
+    console.log(`  Loaded gather log: ${logPath}`);
+
+    const toUpdate = gatherLog.items.filter(item =>
+      item.processedStatus === "success" &&
+      !item.alreadyFixed &&
+      !item.snowUpdated &&
+      item.ticketComment
+    );
+
+    console.log(`  ${toUpdate.length} item(s) need ServiceNow update`);
+
+    if (toUpdate.length === 0) {
+      console.log(`  ${c.dim("Nothing to update.")}`);
+      process.exit(0);
+    }
+
+    // Use incognito context for ServiceNow to avoid SSO conflicts with DRIVE
+    const snowContext = await browser.newContext();
+    const snowPage = await snowContext.newPage();
+
+    const servicenowSkill = skillLoader.get("servicenow");
+    if (!servicenowSkill) {
+      console.error(`  ${c.red("X")} servicenow skill not loaded`);
+      process.exit(1);
+    }
+
+    // Navigate to ServiceNow and wait for SSO login
+    logger.warn("Opening ServiceNow in incognito context - please complete SSO login");
+    const commentFn = servicenowSkill.provider.getCapability("ticket-comment");
+    const checkCommentFn = servicenowSkill.provider.getCapability("ticket-check-comment");
+
+    if (!commentFn) {
+      console.error(`  ${c.red("X")} servicenow skill missing ticket-comment capability`);
+      process.exit(1);
+    }
+
+    for (let i = 0; i < toUpdate.length; i++) {
+      const item = toUpdate[i];
+      console.log(`\n${c.bold(`[${i + 1}/${toUpdate.length}] ${item.id}`)}`);
+
+      try {
+        // Check if ticket already has the completion comment
+        if (checkCommentFn) {
+          const hasComment = await checkCommentFn(
+            { sysId: item.ticket.fields.sysId, incNumber: item.id },
+            ["requote bound", "payments sent to gwbc"],
+            { page: snowPage }
+          );
+          if (hasComment) {
+            logger.log(`Already has completion comment - skipping`);
+            item.snowUpdated = true;
+            item.snowUpdatedAt = new Date().toISOString();
+            saveGatherLog(logPath, gatherLog);
+            continue;
+          }
+        }
+
+        await commentFn(
+          { sysId: item.ticket.fields.sysId, incNumber: item.id },
+          item.ticketComment!,
+          { field: item.commentIsInternal ? "work_notes" : "comments", page: snowPage }
+        );
+
+        item.snowUpdated = true;
+        item.snowUpdatedAt = new Date().toISOString();
+        logger.log(`Posted comment on ${item.id}`);
+      } catch (err) {
+        logger.warn(`Comment failed for ${item.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      // Save after EACH item
+      saveGatherLog(logPath, gatherLog);
+    }
+
+    await snowContext.close();
+    banner("Update Complete");
+    const updated = toUpdate.filter(i => i.snowUpdated).length;
+    console.log(`  ${c.green("Updated:")} ${updated}/${toUpdate.length}\n`);
+    process.exit(0);
+  }
+
+  // ---------------------------------------------------------------------------
+  // --resume mode: load gather log, skip scraping, execute unprocessed items
+  // ---------------------------------------------------------------------------
+  if (resumeMode) {
+    banner("Resume Mode: Loading Gather Log");
+
+    const latest = loadLatestGatherLog(workDir);
+    if (!latest) {
+      console.error(`  ${c.red("X")} No gather log found in ${workDir}`);
+      process.exit(1);
+    }
+
+    const { log: gatherLog, logPath } = latest;
+    console.log(`  Loaded gather log: ${logPath}`);
+    console.log(`  Total items: ${gatherLog.items.length}`);
+
+    const unprocessed = gatherLog.items.filter(item =>
+      !item.processedStatus && item.decision === "execute" && item.executor
+    );
+
+    console.log(`  Unprocessed items to execute: ${unprocessed.length}`);
+
+    if (unprocessed.length === 0) {
+      console.log(`  ${c.dim("Nothing to resume.")}`);
+      process.exit(0);
+    }
+
+    banner("Executing Unprocessed Items");
+
+    let success = 0, failed = 0;
+
+    for (let i = 0; i < unprocessed.length; i++) {
+      const item = unprocessed[i];
+      const executor = registry.get(item.executor!);
+      if (!executor) {
+        item.processedStatus = "failed";
+        item.processedAt = new Date().toISOString();
+        item.error = `Executor ${item.executor} not found`;
+        failed++;
+        saveGatherLog(logPath, gatherLog);
+        continue;
+      }
+
+      console.log(`\n${c.bold(`[${i + 1}/${unprocessed.length}] ${item.id} -> ${executor.name}`)}`);
+
+      // Use default context for DRIVE operations
+      const ctx: WorkflowContext = { browser, skills: skillLoader, workDir, logger, dryRun: false };
+      const result = await executor.execute(item.ticket, ctx);
+
+      item.processedStatus = result.success ? "success" : "failed";
+      item.processedAt = new Date().toISOString();
+      if (result.ticketComment) item.ticketComment = result.ticketComment;
+      if (result.commentIsInternal) item.commentIsInternal = result.commentIsInternal;
+      if (result.error) item.error = result.error;
+
+      if (result.success) {
+        success++;
+        console.log(`  ${c.green("OK")} ${result.summary}`);
+      } else {
+        failed++;
+        console.log(`  ${c.red("FAIL")} ${result.error || result.summary}`);
+      }
+
+      for (const step of result.steps) {
+        const icon = step.status === "completed" ? c.green("v") : step.status === "failed" ? c.red("x") : c.yellow("-");
+        console.log(`    ${icon} ${step.name}: ${step.detail}`);
+      }
+
+      // Save after EACH item
+      saveGatherLog(logPath, gatherLog);
+    }
+
+    banner("Resume Complete");
+    console.log(`  ${c.green("Success:")} ${success}  ${c.red("Failed:")} ${failed}\n`);
+    process.exit(0);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Normal flow: Steps 4-6
+  // ---------------------------------------------------------------------------
+
   // ── Step 4: Scrape Tickets ────────────────────────────────────
   banner("Step 4: Scraping Tickets");
 
@@ -242,7 +465,6 @@ async function main() {
     process.exit(0);
   }
 
-  // Read details
   const readFn = servicenowSkill.provider.getCapability("ticket-read");
   const tickets: Ticket[] = [];
 
@@ -298,14 +520,22 @@ async function main() {
 
   console.log(`\n  ${c.bold("Plan:")} ${automatable.length} to automate, ${skipped.length} to skip`);
 
-  // Save gather log
-  const logPath = path.join(workDir, `tierzero-${new Date().toISOString().slice(0, 10)}.json`);
-  fs.writeFileSync(logPath, JSON.stringify({
+  // Save gather log with full item data
+  const logPath = getGatherLogPath(workDir);
+  const gatherLog: GatherLog = {
     timestamp: new Date().toISOString(),
     demo: demoName,
     mode: dryRun ? "dry-run" : gatherOnly ? "gather" : "live",
-    plans: plans.map(p => ({ id: p.ticket.id, title: p.ticket.title, executor: p.executorId, decision: p.decision })),
-  }, null, 2));
+    items: plans.map(p => ({
+      id: p.ticket.id,
+      title: p.ticket.title,
+      executor: p.executorId,
+      decision: p.decision,
+      ticket: p.ticket,
+      alreadyFixed: p.ticket.fields.alreadyFixed as boolean | undefined,
+    })),
+  };
+  saveGatherLog(logPath, gatherLog);
 
   if (gatherOnly || dryRun || automatable.length === 0) {
     if (gatherOnly) console.log(`\n  ${c.yellow("Gather-only mode. Stopping.")}`);
@@ -325,20 +555,39 @@ async function main() {
 
     console.log(`\n${c.bold(`[${i + 1}/${automatable.length}] ${ticket.id} -> ${executor.name}`)}`);
 
+    // Default browser context for DRIVE admin operations
     const ctx: WorkflowContext = { browser, skills: skillLoader, workDir, logger, dryRun: false };
     const result = await executor.execute(ticket, ctx);
 
-    // Post comment if workflow produced one
+    // Find this item in the gather log and update it
+    const logItem = gatherLog.items.find(item => item.id === ticket.id);
+    if (logItem) {
+      logItem.processedStatus = result.success ? "success" : "failed";
+      logItem.processedAt = new Date().toISOString();
+      if (result.ticketComment) logItem.ticketComment = result.ticketComment;
+      if (result.commentIsInternal) logItem.commentIsInternal = result.commentIsInternal;
+      if (result.error) logItem.error = result.error;
+    }
+
+    // Post comment if workflow produced one - use incognito context for ServiceNow
     if (result.ticketComment) {
       const commentFn = servicenowSkill.provider.getCapability("ticket-comment");
       if (commentFn) {
         try {
+          // Use incognito context for ServiceNow to avoid SSO conflicts with DRIVE
+          const snowContext = await browser.newContext();
+          const snowPage = await snowContext.newPage();
           await commentFn(
             { sysId: ticket.fields.sysId, incNumber: ticket.id },
             result.ticketComment,
-            { field: result.commentIsInternal ? "work_notes" : "comments" }
+            { field: result.commentIsInternal ? "work_notes" : "comments", page: snowPage }
           );
           logger.log(`Posted comment on ${ticket.id}`);
+          if (logItem) {
+            logItem.snowUpdated = true;
+            logItem.snowUpdatedAt = new Date().toISOString();
+          }
+          await snowContext.close();
         } catch (err) {
           logger.warn(`Comment failed: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -357,6 +606,9 @@ async function main() {
       const icon = step.status === "completed" ? c.green("v") : step.status === "failed" ? c.red("x") : c.yellow("-");
       console.log(`    ${icon} ${step.name}: ${step.detail}`);
     }
+
+    // Save gather log after EACH item
+    saveGatherLog(logPath, gatherLog);
   }
 
   banner("Complete");
