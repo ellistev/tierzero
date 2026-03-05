@@ -8,7 +8,7 @@
   },
   "scripts": {
     "typecheck": "tsc",
-    "test": "tsx --test src/connectors/servicenow.test.ts src/connectors/jira.test.ts src/connectors/gitlab.test.ts src/rag/retriever.test.ts src/agent/agent.test.ts src/agent/poller.test.ts src/ingest/azure-devops.test.ts src/ingest/confluence.test.ts src/ingest/url-scraper.test.ts src/ingest/ticket-miner.test.ts src/coder/providers.test.ts src/coder/file-context.test.ts src/coder/implementer.test.ts src/workflows/registry.test.ts src/browser/connection.test.ts src/skills/loader.test.ts",
+    "test": "tsx --test src/connectors/servicenow.test.ts src/connectors/jira.test.ts src/connectors/gitlab.test.ts src/rag/retriever.test.ts src/agent/agent.test.ts src/agent/poller.test.ts src/ingest/azure-devops.test.ts src/ingest/confluence.test.ts src/ingest/url-scraper.test.ts src/ingest/ticket-miner.test.ts src/coder/providers.test.ts src/coder/file-context.test.ts src/coder/implementer.test.ts src/workflows/registry.test.ts src/browser/connection.test.ts src/skills/loader.test.ts src/infra/aggregate.test.ts src/infra/event-store.test.ts src/infra/command-handler.test.ts src/infra/read-model.test.ts src/domain/ticket/Ticket.test.ts src/domain/workflow-execution/WorkflowExecution.test.ts src/read-models/tickets.test.ts src/read-models/workflow-executions.test.ts",
     "test:integration": "tsx test/integration.ts",
     "dev": "tsx src/cli.ts",
     "index": "tsx src/cli.ts index",
@@ -34,10 +34,14 @@
     "@langchain/openai": "^1.2.11",
     "@langchain/textsplitters": "^1.0.1",
     "@types/express": "^5.0.6",
+    "@types/sql.js": "^1.4.9",
+    "@types/uuid": "^10.0.0",
     "chromadb": "^3.3.1",
     "dotenv": "^16.4.5",
     "express": "^5.2.1",
     "pdf-parse": "^2.4.5",
+    "sql.js": "^1.14.1",
+    "uuid": "^13.0.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
