@@ -1,0 +1,34 @@
+{
+  "name": "app-insights",
+  "version": "1.0.0",
+  "description": "Azure Application Insights KQL query execution via az CLI. Run arbitrary or templated KQL queries against any App Insights instance.",
+  "capabilities": [
+    "kql-query",
+    "kql-template"
+  ],
+  "config": {
+    "appId": {
+      "type": "string",
+      "required": true,
+      "description": "App Insights Application ID (GUID)",
+      "env": "APP_INSIGHTS_APP_ID"
+    },
+    "subscription": {
+      "type": "string",
+      "required": true,
+      "description": "Azure subscription name or ID",
+      "env": "AZURE_SUBSCRIPTION"
+    },
+    "offsetDays": {
+      "type": "number",
+      "required": false,
+      "description": "Default query lookback period in days",
+      "default": 90
+    }
+  },
+  "mcpTools": [
+    "app_insights_query",
+    "app_insights_template_query"
+  ],
+  "dependencies": []
+}

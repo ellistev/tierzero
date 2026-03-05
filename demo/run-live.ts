@@ -1,33 +1,26 @@
 #!/usr/bin/env tsx
 /**
- * TierZero LIVE Demo
+ * TierZero LIVE Demo Runner
  * 
- * Connects to REAL ServiceNow, REAL Chrome, REAL App Insights.
- * Uses RAG + workflow registry to understand and execute ticket automation.
+ * Generic runner that loads a demo config, initializes skills,
+ * and runs the workflow pipeline against real systems.
  *
  * Usage:
- *   npm run live              # full execution
- *   npm run live:dry          # dry-run (no actions)
- *   npm run live:gather       # scrape + decide, no execute
+ *   npm run live -- --demo sgi           # full execution
+ *   npm run live -- --demo sgi --dry-run # dry-run
+ *   npm run live -- --demo sgi --gather-only
  */
 
 import "dotenv/config";
 import path from "path";
 import fs from "fs";
-import { KnowledgeIndexer } from "../src/rag/indexer";
-import { KnowledgeRetriever } from "../src/rag/retriever";
-import { connectChrome } from "../src/browser/connection";
-import { openServiceNow, listTickets, readTicketDetail, postComment } from "../src/browser/servicenow-scraper";
-import { DRIVE_ALERTS_LIST_URL } from "../src/browser/servicenow-scraper";
+import { SkillLoader } from "../src/skills/loader";
 import { WorkflowRegistry } from "../src/workflows/registry";
-import { RequoteRebindExecutor, PlateLookupExecutor, QueryHelperExecutor } from "../src/workflows/executors";
-import type { WorkflowLogger, WorkflowContext } from "../src/workflows/types";
-import { ChatOpenAI } from "@langchain/openai";
-import { SystemMessage, HumanMessage } from "@langchain/core/messages";
-import { z } from "zod";
+import { connectChrome } from "../src/browser/connection";
+import type { WorkflowLogger, WorkflowContext, Ticket } from "../src/workflows/types";
 
 // ---------------------------------------------------------------------------
-// ANSI
+// ANSI helpers
 // ---------------------------------------------------------------------------
 
 const isTTY = process.stdout.isTTY;
@@ -38,7 +31,6 @@ const c = {
   red:     (s: string) => isTTY ? `\x1b[31m${s}\x1b[0m` : s,
   yellow:  (s: string) => isTTY ? `\x1b[33m${s}\x1b[0m` : s,
   cyan:    (s: string) => isTTY ? `\x1b[36m${s}\x1b[0m` : s,
-  magenta: (s: string) => isTTY ? `\x1b[35m${s}\x1b[0m` : s,
 };
 
 function banner(text: string) {
@@ -47,60 +39,61 @@ function banner(text: string) {
   console.log(c.bold(c.cyan("+" + "-".repeat(78) + "+")) + "\n");
 }
 
-function hr() { console.log(c.dim("-".repeat(80))); }
-
 const logger: WorkflowLogger = {
   log: (msg) => console.log(`  ${msg}`),
-  warn: (msg) => console.log(`  ${c.yellow("!")}  ${msg}`),
+  warn: (msg) => console.log(`  ${c.yellow("!")} ${msg}`),
   error: (msg) => console.error(`  ${c.red("X")} ${msg}`),
   step: (step, detail) => console.log(`\n${c.bold(c.cyan(step))}: ${detail}`),
 };
 
 // ---------------------------------------------------------------------------
-// RAG-enhanced decision (confirms workflow registry match)
+// Simple YAML parser (enough for our config format)
 // ---------------------------------------------------------------------------
 
-const ragDecisionSchema = z.object({
-  shouldAutomate: z.boolean().describe("Whether the ticket should be automated"),
-  workflowId: z.string().describe("Which workflow to use (requote-rebind, plate-lookup, query-helper, or 'none')"),
-  confidence: z.number().min(0).max(1),
-  reasoning: z.string(),
-});
+function parseSimpleYaml(text: string): Record<string, unknown> {
+  // For demo config, we just need key-value pairs and nested objects
+  // Use a real YAML parser in production
+  const lines = text.split("\n");
+  const result: Record<string, unknown> = {};
+  let currentSection = "";
+  let currentSubSection = "";
 
-async function ragConfirmDecision(
-  ticket: { incNumber: string; shortDesc: string; description: string },
-  registryMatchId: string | null,
-  retriever: KnowledgeRetriever,
-  model: string
-): Promise<z.infer<typeof ragDecisionSchema>> {
-  const query = `${ticket.shortDesc} ${ticket.description?.slice(0, 300) || ""}`;
-  const ragResult = await retriever.search(query, { mmr: true, k: 5 });
-  const { KnowledgeRetriever: KR } = await import("../src/rag/retriever");
-  const kbContext = KR.formatForPrompt(ragResult);
+  for (const line of lines) {
+    if (line.trim().startsWith("#") || line.trim() === "") continue;
 
-  const llm = new ChatOpenAI({ model, temperature: 0 });
-  const structured = llm.withStructuredOutput(ragDecisionSchema);
+    const indent = line.search(/\S/);
+    const content = line.trim();
 
-  const systemPrompt =
-    `You are TierZero's decision engine. Given a ticket and knowledge base context, ` +
-    `confirm whether automation is appropriate and which workflow to use.\n\n` +
-    `Available workflows:\n` +
-    `- requote-rebind: SGI bind failure resolution (requires "Cannot access payment info" error + JSON attachment)\n` +
-    `- plate-lookup: Find plate numbers from job numbers or registration IDs\n` +
-    `- query-helper: Cross-reference IDs across SGI systems\n` +
-    `- none: No automation available, escalate to human\n\n` +
-    `The workflow registry suggested: ${registryMatchId || "no match"}.\n` +
-    `Confirm or override based on the knowledge base context.`;
+    if (indent === 0 && content.endsWith(":")) {
+      currentSection = content.slice(0, -1);
+      result[currentSection] = {};
+      currentSubSection = "";
+    } else if (indent === 2 && content.endsWith(":")) {
+      currentSubSection = content.slice(0, -1);
+      (result[currentSection] as Record<string, unknown>)[currentSubSection] = {};
+    } else if (content.includes(": ")) {
+      const [key, ...valueParts] = content.split(": ");
+      let value: unknown = valueParts.join(": ").replace(/^["']|["']$/g, "");
 
-  return structured.invoke([
-    new SystemMessage(systemPrompt),
-    new HumanMessage(
-      `Ticket: ${ticket.incNumber}\n` +
-      `Short: ${ticket.shortDesc}\n` +
-      `Description:\n${ticket.description?.slice(0, 1000) || "(empty)"}\n\n` +
-      `Knowledge Base:\n${kbContext}`
-    ),
-  ]);
+      // Resolve env var references
+      if (typeof value === "string") {
+        const envMatch = (value as string).match(/^\$\{(\w+)\}$/);
+        if (envMatch && process.env[envMatch[1]]) {
+          value = process.env[envMatch[1]];
+        }
+      }
+
+      if (currentSubSection && currentSection) {
+        ((result[currentSection] as Record<string, unknown>)[currentSubSection] as Record<string, unknown>)[key] = value;
+      } else if (currentSection) {
+        (result[currentSection] as Record<string, unknown>)[key] = value;
+      } else {
+        result[key] = value;
+      }
+    }
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -108,238 +101,246 @@ async function ragConfirmDecision(
 // ---------------------------------------------------------------------------
 
 async function main() {
-  const dryRun = process.argv.includes("--dry-run");
-  const gatherOnly = process.argv.includes("--gather-only");
-  const skipIndex = process.argv.includes("--skip-index");
-  const model = process.argv.includes("--model")
-    ? process.argv[process.argv.indexOf("--model") + 1]
-    : "gpt-4o-mini";
+  const args = process.argv.slice(2);
+  const dryRun = args.includes("--dry-run");
+  const gatherOnly = args.includes("--gather-only");
+  const demoIdx = args.indexOf("--demo");
+  const demoName = demoIdx >= 0 ? args[demoIdx + 1] : null;
 
-  const workDir = path.resolve(__dirname, "..", "json-payloads");
-  if (!fs.existsSync(workDir)) fs.mkdirSync(workDir, { recursive: true });
-
-  banner("TierZero LIVE - AI Ticket Resolution Agent");
-  console.log(`  ${c.bold("Mode:")}        ${dryRun ? c.yellow("DRY RUN") : gatherOnly ? c.yellow("GATHER ONLY") : c.green("LIVE EXECUTION")}`);
-  console.log(`  ${c.bold("Model:")}       ${c.cyan(model)}`);
-  console.log(`  ${c.bold("ServiceNow:")} sgico.service-now.com (REAL)`);
-  console.log(`  ${c.bold("DRIVE:")}       drive.sgicloud.ca (REAL)`);
-  console.log(`  ${c.bold("App Insights:")} SGI-INS-PRD (REAL)`);
-  console.log(`  ${c.bold("Output:")}      ${workDir}`);
-
-  // ── Step 1: Knowledge Base ────────────────────────────────────
-  banner("Step 1: Knowledge Base (ChromaDB + RAG)");
-
-  if (!skipIndex) {
-    let chromaOk = false;
-    try {
-      const res = await fetch("http://localhost:8000/api/v2/heartbeat").catch(() => null);
-      if (!res || !res.ok) {
-        const res2 = await fetch("http://localhost:8000/api/v1/heartbeat").catch(() => null);
-        chromaOk = !!(res2 && res2.ok);
-      } else chromaOk = true;
-    } catch {}
-
-    if (!chromaOk) {
-      console.log(`  ${c.red("X")} ChromaDB not running. Start: chroma run --host localhost --port 8000`);
-      process.exit(1);
-    }
-
-    const indexer = new KnowledgeIndexer({
-      knowledgeDir: path.resolve(__dirname, "..", "knowledge"),
-      collectionName: "tierzero-live",
-      chromaUrl: "http://localhost:8000",
-      chunkSize: 800,
-      chunkOverlap: 150,
-    });
-
-    const result = await indexer.index({ force: false });
-    console.log(`  ${c.green("OK")} Indexed ${result.filesProcessed} files, ${result.chunksAdded} chunks`);
+  if (!demoName) {
+    console.error("Usage: tsx demo/run-live.ts --demo <name> [--dry-run] [--gather-only]");
+    console.error("  e.g. tsx demo/run-live.ts --demo sgi");
+    process.exit(1);
   }
 
-  const retriever = new KnowledgeRetriever({
-    collectionName: "tierzero-live",
-    chromaUrl: "http://localhost:8000",
-    k: 5,
-    scoreThreshold: 0.3,
+  const projectRoot = path.resolve(__dirname, "..");
+  const demoDir = path.join(projectRoot, "demos", demoName);
+  const configPath = path.join(demoDir, "config.yaml");
+
+  if (!fs.existsSync(configPath)) {
+    console.error(`Demo config not found: ${configPath}`);
+    process.exit(1);
+  }
+
+  // Load demo .env if present
+  const demoEnvPath = path.join(demoDir, ".env");
+  if (fs.existsSync(demoEnvPath)) {
+    const envContent = fs.readFileSync(demoEnvPath, "utf-8");
+    for (const line of envContent.split("\n")) {
+      if (line.trim() && !line.startsWith("#")) {
+        const [key, ...val] = line.split("=");
+        if (key && val.length) process.env[key.trim()] = val.join("=").trim();
+      }
+    }
+  }
+
+  // Load env section from config
+  const configRaw = fs.readFileSync(configPath, "utf-8");
+  const config = parseSimpleYaml(configRaw);
+
+  // Apply env defaults from config
+  if (config.env && typeof config.env === "object") {
+    for (const [key, value] of Object.entries(config.env as Record<string, string>)) {
+      if (!process.env[key]) process.env[key] = value;
+    }
+  }
+
+  const workDir = path.join(demoDir, "json-payloads");
+  if (!fs.existsSync(workDir)) fs.mkdirSync(workDir, { recursive: true });
+
+  banner(`TierZero LIVE - ${(config as Record<string, unknown>).name || demoName}`);
+  console.log(`  ${c.bold("Demo:")}  ${demoName} (${demoDir})`);
+  console.log(`  ${c.bold("Mode:")}  ${dryRun ? c.yellow("DRY RUN") : gatherOnly ? c.yellow("GATHER ONLY") : c.green("LIVE EXECUTION")}`);
+
+  // ── Step 1: Load Skills ───────────────────────────────────────
+  banner("Step 1: Loading Skills");
+
+  const skillConfig = (config.skills as Record<string, Record<string, unknown>>) ?? {};
+
+  const skillLoader = new SkillLoader({
+    skillDirs: [
+      path.join(projectRoot, "skills"),        // Bundled skills
+      path.join(demoDir, "skills"),             // Demo-specific skills
+    ],
+    config: skillConfig,
+    logger,
   });
 
-  // ── Step 2: Workflow Registry ─────────────────────────────────
-  banner("Step 2: Workflow Registry");
+  await skillLoader.loadAll();
+
+  const loadedSkills = skillLoader.getAll();
+  console.log(`\n  ${c.green("OK")} ${loadedSkills.length} skill(s) loaded:`);
+  for (const skill of loadedSkills) {
+    console.log(`     - ${c.cyan(skill.manifest.name)} [${skill.source}] (${skill.provider.listCapabilities().length} capabilities)`);
+  }
+
+  // ── Step 2: Load Workflows ────────────────────────────────────
+  banner("Step 2: Loading Workflows");
 
   const registry = new WorkflowRegistry();
-  registry.register(new RequoteRebindExecutor());
-  registry.register(new PlateLookupExecutor());
-  registry.register(new QueryHelperExecutor());
+  const workflowDir = path.join(demoDir, "workflows");
+  const loaded = await registry.loadFromDir(workflowDir);
+  console.log(`  ${c.green("OK")} ${loaded} workflow(s) loaded from ${workflowDir}`);
 
-  console.log(`  ${c.green("OK")} ${registry.list().length} workflows registered:`);
   for (const wf of registry.list()) {
     console.log(`     - ${c.cyan(wf.id)}: ${wf.description.slice(0, 60)}`);
   }
 
   // ── Step 3: Connect to Chrome ─────────────────────────────────
-  banner("Step 3: Chrome + ServiceNow");
+  banner("Step 3: Browser Connection");
 
   const browser = await connectChrome();
   console.log(`  ${c.green("OK")} Connected to Chrome (CDP)`);
 
-  const snowSession = await openServiceNow(browser, {
-    onWaiting: () => logger.warn("Please log into ServiceNow in the browser tab"),
-    onLoggedIn: () => logger.log("ServiceNow login detected!"),
-  });
-  console.log(`  ${c.green("OK")} ServiceNow session ready`);
-
   // ── Step 4: Scrape Tickets ────────────────────────────────────
   banner("Step 4: Scraping Tickets");
 
-  const ticketSummaries = await listTickets(snowSession, DRIVE_ALERTS_LIST_URL);
-  console.log(`  Found ${ticketSummaries.length} DRIVE Alerts ticket(s)`);
+  const servicenowSkill = skillLoader.get("servicenow");
+  if (!servicenowSkill) {
+    console.error(`  ${c.red("X")} servicenow skill not loaded`);
+    process.exit(1);
+  }
 
-  if (ticketSummaries.length === 0) {
+  const listFn = servicenowSkill.provider.getCapability("ticket-list");
+  if (!listFn) {
+    console.error(`  ${c.red("X")} servicenow skill missing ticket-list capability`);
+    process.exit(1);
+  }
+
+  const rawTickets = await listFn(browser, {
+    onWaiting: () => logger.warn("Please log into ServiceNow"),
+    onLoggedIn: () => logger.log("ServiceNow login detected!"),
+  }) as Array<{ incNumber: string; sysId: string; shortDesc: string }>;
+
+  console.log(`  Found ${rawTickets.length} ticket(s)`);
+
+  if (rawTickets.length === 0) {
     console.log(`  ${c.dim("No tickets. Done.")}`);
     process.exit(0);
   }
 
-  // Read details for each ticket
-  const tickets = [];
-  for (const summary of ticketSummaries) {
+  // Read details
+  const readFn = servicenowSkill.provider.getCapability("ticket-read");
+  const tickets: Ticket[] = [];
+
+  for (const raw of rawTickets) {
     try {
-      const detail = await readTicketDetail(snowSession, summary);
-      tickets.push(detail);
-      const status = detail.alreadyFixed ? c.dim("[DONE]") : detail.hasGwError ? c.green("[GW]") : c.dim("[--]");
-      console.log(`  ${status} ${detail.incNumber}: ${detail.shortDesc} | Job: ${detail.oldJobNumber || "N/A"}`);
+      const detail = readFn ? await readFn(raw) as Record<string, unknown> : null;
+      const ticket: Ticket = {
+        id: (detail?.incNumber as string) || raw.incNumber,
+        title: raw.shortDesc,
+        description: (detail?.description as string) || "",
+        source: "servicenow",
+        fields: {
+          sysId: raw.sysId,
+          ...(detail?.extracted as Record<string, unknown> ?? {}),
+          attachmentSysId: detail?.attachmentSysId,
+          attachmentName: detail?.attachmentName,
+        },
+      };
+      tickets.push(ticket);
+      console.log(`  ${c.dim(ticket.id)}: ${ticket.title}`);
     } catch (err) {
-      logger.warn(`Could not read ${summary.incNumber}: ${err instanceof Error ? err.message : String(err)}`);
+      logger.warn(`Could not read ${raw.incNumber}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
-  // ── Step 5: Decide + Plan ─────────────────────────────────────
-  banner("Step 5: AI Decision Engine (Registry + RAG + LLM)");
+  // ── Step 5: Match & Decide ────────────────────────────────────
+  banner("Step 5: Matching Workflows");
 
   interface Plan {
-    ticket: typeof tickets[0];
-    registryMatch: string | null;
-    ragDecision: z.infer<typeof ragDecisionSchema>;
+    ticket: Ticket;
+    executorId: string | null;
+    decision: string;
   }
 
   const plans: Plan[] = [];
 
   for (const ticket of tickets) {
-    // First: fast registry check
     const match = registry.findBest(ticket);
-    const registryMatchId = match?.executor.id ?? null;
-
-    // Second: RAG + LLM confirmation
-    const ragDecision = await ragConfirmDecision(ticket, registryMatchId, retriever, model);
+    const decision = match ? match.decision : "skip";
+    const executorId = match?.executor.id ?? null;
 
     const badge =
-      ragDecision.shouldAutomate ? c.green("AUTOMATE") :
-      ragDecision.workflowId === "none" ? c.red("ESCALATE") :
-      c.yellow("MANUAL");
+      decision === "execute" ? c.green("AUTOMATE") :
+      decision === "needs_info" ? c.yellow("NEEDS INFO") :
+      c.dim("SKIP");
 
-    console.log(`  ${c.bold(ticket.incNumber)}: ${badge} [${ragDecision.workflowId}] conf=${ragDecision.confidence.toFixed(2)}`);
-    console.log(`    ${c.dim(ragDecision.reasoning.slice(0, 120))}`);
-
-    plans.push({ ticket, registryMatch: registryMatchId, ragDecision });
+    console.log(`  ${c.bold(ticket.id)}: ${badge} ${executorId ? `[${executorId}]` : ""}`);
+    plans.push({ ticket, executorId, decision });
   }
 
-  // Summary
-  const automatable = plans.filter(p => p.ragDecision.shouldAutomate && p.ragDecision.workflowId !== "none");
-  const skipped = plans.filter(p => !p.ragDecision.shouldAutomate || p.ragDecision.workflowId === "none");
+  const automatable = plans.filter(p => p.decision === "execute" && p.executorId);
+  const skipped = plans.filter(p => p.decision !== "execute" || !p.executorId);
 
-  hr();
-  console.log(`\n  ${c.bold("Plan:")} ${automatable.length} to automate, ${skipped.length} to skip/escalate`);
+  console.log(`\n  ${c.bold("Plan:")} ${automatable.length} to automate, ${skipped.length} to skip`);
 
   // Save gather log
-  const gatherLog = {
-    timestamp: new Date().toISOString(),
-    mode: dryRun ? "dry-run" : gatherOnly ? "gather-only" : "live",
-    tickets: plans.map(p => ({
-      incNumber: p.ticket.incNumber,
-      shortDesc: p.ticket.shortDesc,
-      registryMatch: p.registryMatch,
-      workflowId: p.ragDecision.workflowId,
-      shouldAutomate: p.ragDecision.shouldAutomate,
-      confidence: p.ragDecision.confidence,
-      reasoning: p.ragDecision.reasoning,
-      oldJobNumber: p.ticket.oldJobNumber,
-    })),
-  };
   const logPath = path.join(workDir, `tierzero-${new Date().toISOString().slice(0, 10)}.json`);
-  fs.writeFileSync(logPath, JSON.stringify(gatherLog, null, 2));
-  console.log(`  Log: ${logPath}`);
+  fs.writeFileSync(logPath, JSON.stringify({
+    timestamp: new Date().toISOString(),
+    demo: demoName,
+    mode: dryRun ? "dry-run" : gatherOnly ? "gather" : "live",
+    plans: plans.map(p => ({ id: p.ticket.id, title: p.ticket.title, executor: p.executorId, decision: p.decision })),
+  }, null, 2));
 
   if (gatherOnly || dryRun || automatable.length === 0) {
     if (gatherOnly) console.log(`\n  ${c.yellow("Gather-only mode. Stopping.")}`);
-    if (dryRun) console.log(`\n  ${c.yellow("Dry-run mode. No actions taken.")}`);
     if (automatable.length === 0) console.log(`\n  ${c.dim("Nothing to automate.")}`);
     process.exit(0);
   }
 
-  // ── Step 6: Execute Workflows ─────────────────────────────────
+  // ── Step 6: Execute ───────────────────────────────────────────
   banner("Step 6: Executing Workflows");
 
-  let success = 0;
-  let failed = 0;
+  let success = 0, failed = 0;
 
   for (let i = 0; i < automatable.length; i++) {
-    const { ticket, ragDecision } = automatable[i];
-    const executor = registry.get(ragDecision.workflowId);
+    const { ticket, executorId } = automatable[i];
+    const executor = registry.get(executorId!);
+    if (!executor) { failed++; continue; }
 
-    if (!executor) {
-      logger.error(`No executor for workflow: ${ragDecision.workflowId}`);
-      failed++;
-      continue;
-    }
+    console.log(`\n${c.bold(`[${i + 1}/${automatable.length}] ${ticket.id} -> ${executor.name}`)}`);
 
-    console.log(`\n${c.bold(`[${i + 1}/${automatable.length}] ${ticket.incNumber} -> ${executor.name}`)}`);
-    hr();
-
-    const ctx: WorkflowContext = {
-      browser,
-      workDir,
-      logger,
-      dryRun: false,
-    };
-
+    const ctx: WorkflowContext = { browser, skills: skillLoader, workDir, logger, dryRun: false };
     const result = await executor.execute(ticket, ctx);
 
     // Post comment if workflow produced one
     if (result.ticketComment) {
-      try {
-        await postComment(snowSession, ticket, result.ticketComment, {
-          field: result.commentIsInternal ? "work_notes" : "comments",
-        });
-        logger.log(`Posted ${result.commentIsInternal ? "internal note" : "comment"} on ${ticket.incNumber}`);
-      } catch (err) {
-        logger.warn(`Could not post comment: ${err instanceof Error ? err.message : String(err)}`);
+      const commentFn = servicenowSkill.provider.getCapability("ticket-comment");
+      if (commentFn) {
+        try {
+          await commentFn(
+            { sysId: ticket.fields.sysId, incNumber: ticket.id },
+            result.ticketComment,
+            { field: result.commentIsInternal ? "work_notes" : "comments" }
+          );
+          logger.log(`Posted comment on ${ticket.id}`);
+        } catch (err) {
+          logger.warn(`Comment failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
     }
 
     if (result.success) {
       success++;
-      console.log(`  ${c.green("OK")} ${ticket.incNumber}: ${result.summary}`);
+      console.log(`  ${c.green("OK")} ${result.summary}`);
     } else {
       failed++;
-      console.log(`  ${c.red("FAIL")} ${ticket.incNumber}: ${result.error || result.summary}`);
+      console.log(`  ${c.red("FAIL")} ${result.error || result.summary}`);
     }
 
-    // Log steps
     for (const step of result.steps) {
       const icon = step.status === "completed" ? c.green("v") : step.status === "failed" ? c.red("x") : c.yellow("-");
       console.log(`    ${icon} ${step.name}: ${step.detail}`);
     }
   }
 
-  // ── Summary ───────────────────────────────────────────────────
-  banner("Pipeline Complete");
-  console.log(`  ${c.green("Success:")} ${success}`);
-  console.log(`  ${c.red("Failed:")}  ${failed}`);
-  console.log(`  ${c.dim("Skipped:")} ${skipped.length}`);
-  console.log();
+  banner("Complete");
+  console.log(`  ${c.green("Success:")} ${success}  ${c.red("Failed:")} ${failed}  ${c.dim("Skipped:")} ${skipped.length}\n`);
 }
 
 main().catch(err => {
-  console.error(`\n${c.red("Fatal:")} ${err instanceof Error ? err.message : String(err)}`);
-  console.error(err);
+  console.error(`\nFatal: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 });

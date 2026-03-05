@@ -31,3 +31,9 @@ Thumbs.db
 
 # TypeScript
 *.tsbuildinfo
+
+# Demo directories (client-specific configs, secrets, workflows)
+demos/
+
+# Workflow execution artifacts
+json-payloads/

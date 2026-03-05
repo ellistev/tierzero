@@ -1,29 +1,6 @@
-export { connectChrome, getIncognitoContext, getDefaultContext } from "./connection";
+/**
+ * Browser core - generic connection and auth helpers.
+ * Ticketing-system-specific automation lives in skills/.
+ */
+export { connectChrome, getIncognitoContext, getDefaultContext, CDP_URL, CHROME_USER_DATA, CHROME_EXE } from "./connection";
 export { waitForSSOLogin, handleOrgModal, navigateWithAuth } from "./auth";
-export {
-  openServiceNow,
-  listTickets,
-  readTicketDetail,
-  downloadAttachment,
-  postComment,
-  SERVICENOW_BASE,
-  DRIVE_ALERTS_LIST_URL,
-  type ScrapedTicketSummary,
-  type ScrapedTicketDetail,
-  type ServiceNowSession,
-} from "./servicenow-scraper";
-export {
-  checkAclQueue,
-  pollAclCompletion,
-  searchStream,
-  expandEventRow,
-  findQuoteId,
-  appendCorrectionAndBind,
-  submitPaymentRepair,
-  lookupPlate,
-  ACL_QUEUE_URL,
-  DATA_EXPLORER_URL,
-  PAYMENT_REPAIR_URL,
-  type AclFailurePattern,
-  type PlateLookupResult,
-} from "./drive-admin";

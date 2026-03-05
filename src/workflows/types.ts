@@ -5,10 +5,13 @@
  * to resolve a specific type of ticket. Workflows are matched
  * to tickets via RAG (knowledge base runbooks describe when
  * to use each workflow).
+ * 
+ * Types are GENERIC - no dependency on any specific ticketing system.
+ * Ticket types are defined by skills (ServiceNow, Jira, etc).
  */
 
 import type { Browser } from "playwright";
-import type { ScrapedTicketDetail } from "../browser/servicenow-scraper";
+import type { SkillLoader } from "../skills/loader";
 
 export type WorkflowDecision =
   | "execute"     // Workflow can handle this ticket
@@ -16,9 +19,28 @@ export type WorkflowDecision =
   | "needs_info"  // Not enough info to execute
   | "skip";       // Already done or not applicable
 
+/**
+ * Generic ticket representation.
+ * Skills produce this; workflows consume it.
+ */
+export interface Ticket {
+  /** Ticket identifier (e.g. INC0099001, JIRA-123) */
+  id: string;
+  /** Short description / title */
+  title: string;
+  /** Full description */
+  description: string;
+  /** Ticket source system */
+  source: string;
+  /** Arbitrary fields extracted by the ticketing skill */
+  fields: Record<string, unknown>;
+}
+
 export interface WorkflowContext {
   /** The browser instance for automation */
   browser: Browser;
+  /** Loaded skills (for accessing capabilities) */
+  skills: SkillLoader;
   /** Directory for storing downloaded files, logs, etc. */
   workDir: string;
   /** Logger for step-by-step output */
@@ -59,13 +81,13 @@ export interface WorkflowStep {
 }
 
 /**
- * A WorkflowExecutor is a module that can handle a specific type of ticket.
+ * A WorkflowExecutor handles a specific type of ticket.
  * 
  * To teach TierZero a new workflow:
- * 1. Write a runbook in knowledge/runbooks/ (teaches the RAG what to match)
- * 2. Write a workflow definition in knowledge/workflows/ (machine-readable config)
- * 3. Implement a WorkflowExecutor (the actual automation code)
- * 4. Register it in the WorkflowRegistry
+ * 1. Write a runbook in your demo's runbooks/ (teaches the RAG what to match)
+ * 2. Implement a WorkflowExecutor (the actual automation code)
+ * 3. Drop it in your demo's workflows/ folder
+ * 4. TierZero hot-loads it at startup
  */
 export interface WorkflowExecutor {
   /** Unique identifier for this workflow */
@@ -78,12 +100,11 @@ export interface WorkflowExecutor {
   /**
    * Quick check: can this workflow handle the given ticket?
    * Should be fast (no browser automation, no API calls).
-   * Used for initial filtering before RAG confirmation.
    */
-  canHandle(ticket: ScrapedTicketDetail): WorkflowDecision;
+  canHandle(ticket: Ticket): WorkflowDecision;
 
   /**
    * Execute the workflow. Does the actual work.
    */
-  execute(ticket: ScrapedTicketDetail, ctx: WorkflowContext): Promise<WorkflowResult>;
+  execute(ticket: Ticket, ctx: WorkflowContext): Promise<WorkflowResult>;
 }

@@ -1,0 +1,36 @@
+{
+  "name": "servicenow",
+  "version": "1.0.0",
+  "description": "ServiceNow ticket management via browser automation. Handles shadow DOM iframe traversal for modern ServiceNow UI.",
+  "capabilities": [
+    "ticket-list",
+    "ticket-read",
+    "ticket-comment",
+    "attachment-download"
+  ],
+  "config": {
+    "baseUrl": {
+      "type": "string",
+      "required": true,
+      "description": "ServiceNow instance base URL (e.g. https://mycompany.service-now.com)",
+      "env": "SERVICENOW_URL"
+    },
+    "listQuery": {
+      "type": "string",
+      "required": false,
+      "description": "URL-encoded sysparm_query for the ticket list view"
+    },
+    "assignmentGroups": {
+      "type": "string[]",
+      "required": false,
+      "description": "Assignment group sys_ids to filter tickets"
+    }
+  },
+  "mcpTools": [
+    "servicenow_list_tickets",
+    "servicenow_read_ticket",
+    "servicenow_post_comment",
+    "servicenow_download_attachment"
+  ],
+  "dependencies": ["browser"]
+}

@@ -8,7 +8,7 @@
   },
   "scripts": {
     "typecheck": "tsc",
-    "test": "tsx --test src/connectors/servicenow.test.ts src/connectors/jira.test.ts src/connectors/gitlab.test.ts src/rag/retriever.test.ts src/agent/agent.test.ts src/agent/poller.test.ts src/ingest/azure-devops.test.ts src/ingest/confluence.test.ts src/ingest/url-scraper.test.ts src/ingest/ticket-miner.test.ts src/coder/providers.test.ts src/coder/file-context.test.ts src/coder/implementer.test.ts src/workflows/registry.test.ts src/browser/connection.test.ts src/integrations/app-insights.test.ts",
+    "test": "tsx --test src/connectors/servicenow.test.ts src/connectors/jira.test.ts src/connectors/gitlab.test.ts src/rag/retriever.test.ts src/agent/agent.test.ts src/agent/poller.test.ts src/ingest/azure-devops.test.ts src/ingest/confluence.test.ts src/ingest/url-scraper.test.ts src/ingest/ticket-miner.test.ts src/coder/providers.test.ts src/coder/file-context.test.ts src/coder/implementer.test.ts src/workflows/registry.test.ts src/browser/connection.test.ts src/skills/loader.test.ts",
     "test:integration": "tsx test/integration.ts",
     "dev": "tsx src/cli.ts",
     "index": "tsx src/cli.ts index",
@@ -22,7 +22,10 @@
     "demo:dry": "tsx demo/run-demo.ts --dry-run",
     "live": "tsx demo/run-live.ts",
     "live:dry": "tsx demo/run-live.ts --dry-run",
-    "live:gather": "tsx demo/run-live.ts --gather-only"
+    "live:gather": "tsx demo/run-live.ts --gather-only",
+    "live:sgi": "tsx demo/run-live.ts --demo sgi",
+    "live:sgi:dry": "tsx demo/run-live.ts --demo sgi --dry-run",
+    "live:sgi:gather": "tsx demo/run-live.ts --demo sgi --gather-only"
   },
   "dependencies": {
     "@langchain/community": "^1.1.20",

@@ -4,10 +4,11 @@
  * Maps ticket characteristics to workflow executors.
  * The agent uses RAG to understand WHAT a ticket needs,
  * then the registry finds the right executor to DO it.
+ * 
+ * Executors are hot-loaded from demo workflow directories at startup.
  */
 
-import type { ScrapedTicketDetail } from "../browser/servicenow-scraper";
-import type { WorkflowExecutor, WorkflowDecision } from "./types";
+import type { Ticket, WorkflowExecutor, WorkflowDecision } from "./types";
 
 export interface RegistryMatch {
   executor: WorkflowExecutor;
@@ -43,10 +44,9 @@ export class WorkflowRegistry {
   }
 
   /**
-   * Find the best workflow for a ticket.
-   * Returns all executors that can handle the ticket, sorted by priority.
+   * Find workflows that can handle a ticket.
    */
-  match(ticket: ScrapedTicketDetail): RegistryMatch[] {
+  match(ticket: Ticket): RegistryMatch[] {
     const matches: RegistryMatch[] = [];
 
     for (const executor of this.executors.values()) {
@@ -56,30 +56,61 @@ export class WorkflowRegistry {
       } else if (decision === "needs_info") {
         matches.push({ executor, decision, confidence: 0.5 });
       }
-      // skip and escalate are not matches
     }
 
-    // Sort by confidence (highest first)
     return matches.sort((a, b) => b.confidence - a.confidence);
   }
 
   /**
    * Find the single best executor for a ticket, or null if none match.
    */
-  findBest(ticket: ScrapedTicketDetail): RegistryMatch | null {
+  findBest(ticket: Ticket): RegistryMatch | null {
     const matches = this.match(ticket);
     return matches.length > 0 ? matches[0] : null;
   }
-}
 
-/**
- * Create a registry with all built-in workflow executors.
- */
-export function createDefaultRegistry(): WorkflowRegistry {
-  // Lazy import to avoid circular deps
-  const registry = new WorkflowRegistry();
+  /**
+   * Hot-load workflow executors from a directory.
+   * Each .ts file must default-export a WorkflowExecutor instance or factory.
+   */
+  async loadFromDir(dir: string): Promise<number> {
+    const fs = await import("fs");
+    const path = await import("path");
 
-  // Executors are registered by the caller after import
-  // This keeps the registry decoupled from specific implementations
-  return registry;
+    if (!fs.existsSync(dir)) return 0;
+
+    let loaded = 0;
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      if (!entry.name.endsWith(".ts") && !entry.name.endsWith(".js")) continue;
+      // Skip YAML workflow definitions
+      if (entry.name.endsWith(".yaml") || entry.name.endsWith(".yml")) continue;
+
+      const filePath = path.join(dir, entry.name);
+      const fileUrl = "file://" + filePath.replace(/\\/g, "/");
+
+      try {
+        const mod = await import(fileUrl);
+        const executor: WorkflowExecutor = mod.default ?? mod.executor ?? mod;
+
+        if (executor && typeof executor.canHandle === "function" && executor.id) {
+          this.register(executor);
+          loaded++;
+        } else if (typeof mod.default === "function") {
+          // Factory function
+          const instance = mod.default();
+          if (instance && instance.id) {
+            this.register(instance);
+            loaded++;
+          }
+        }
+      } catch (err) {
+        console.warn(`Failed to load workflow ${entry.name}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    return loaded;
+  }
 }
