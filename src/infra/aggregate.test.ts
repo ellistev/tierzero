@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { Aggregate, type ClassWithMeta } from "./aggregate";
+import { Aggregate } from "./aggregate";
 
 // Test event/command classes
 class TestCommand {
@@ -41,7 +41,7 @@ class TestAggregate extends Aggregate<TestState> {
   }
 }
 
-describe("Aggregate", () => {
+describe("Aggregate (checkonmom infra)", () => {
   it("should execute a command and return events", () => {
     const agg = new TestAggregate();
     const events = agg.execute(new TestCommand("hello"));
@@ -77,7 +77,6 @@ describe("Aggregate", () => {
   it("should freeze state before passing to handlers", () => {
     const agg = new TestAggregate();
     agg.hydrate(new TestEvent("test"));
-    // State should be frozen during command execution - the handler receives frozen state
     const events = agg.execute(new TestCommand("another"));
     assert.ok(events);
   });
@@ -107,7 +106,7 @@ describe("Aggregate", () => {
   it("should ignore events with no registered handler", () => {
     class RandomEvent { static type = "RandomEvent"; }
     const agg = new TestAggregate();
-    agg.hydrate(new RandomEvent()); // Should not throw
+    agg.hydrate(new RandomEvent());
     const memento = agg.createMemento();
     assert.deepEqual(memento.state, {});
   });

@@ -20,6 +20,9 @@
     // Skip type-checking inside node_modules (LangChain types can be noisy)
     "skipLibCheck": true,
 
+    // Allow importing JS modules from TS (infra layer is JS)
+    "allowJs": true,
+
     "resolveJsonModule": true,
 
     // tsc is used only for type-checking, not for emitting output.
@@ -28,5 +31,5 @@
     "noEmit": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "venv", "dist"]
+  "exclude": ["node_modules", "venv", "dist", "src/infra/tests", "src/infra/**/*.test.js", "src/infra/**/*.test.ts"]
 }

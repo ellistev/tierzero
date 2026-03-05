@@ -1,70 +1,89 @@
-import type { ReadModelDefinition, StoredEvent, ReadModelRepo } from "../infra/interfaces";
+/**
+ * Ticket Stats Read Model
+ * Aggregated statistics projected from ticket events
+ */
+
+interface BuilderEventData {
+  streamId: string;
+  eventNumber: number;
+  position: unknown;
+  event: unknown;
+  eventId: string;
+  typeId: string;
+  creationTime: number;
+  metadata: Record<string, unknown>;
+}
+
+interface TransactionalRepository<T> {
+  create_v2(record: T): void;
+  upsert(record: T): void;
+  updateOne(filter: Partial<T>, update: Partial<T>): void;
+  findOne_v2(filter: Partial<T>): Promise<T | null>;
+}
+
+export interface TicketStatsRecord {
+  id: string;
+  total: number;
+  totalReceived: number;
+  totalAnalyzed: number;
+  totalMatched: number;
+  totalEscalated: number;
+  totalResolved: number;
+}
 
 const STATS_KEY = "global";
 
-export const ticketStatsReadModel: ReadModelDefinition = {
+export const ticketStatsReadModel = {
+  name: "ticket_stats",
   config: {
-    table: "ticket_stats",
     key: "id",
     schema: {
-      id: "TEXT PRIMARY KEY",
-      total: "INTEGER",
-      byStatus: "TEXT",
-      byWorkflow: "TEXT",
-      totalResolved: "INTEGER",
-      totalEscalated: "INTEGER",
+      id: { type: "string", nullable: false },
+      total: { type: "number", nullable: false },
+      totalReceived: { type: "number", nullable: false },
+      totalAnalyzed: { type: "number", nullable: false },
+      totalMatched: { type: "number", nullable: false },
+      totalEscalated: { type: "number", nullable: false },
+      totalResolved: { type: "number", nullable: false },
     },
   },
-  handler(repo: ReadModelRepo, event: StoredEvent) {
-    function ensureStats(): Record<string, unknown> {
-      let stats = repo.findOne(STATS_KEY);
+  lookups: {},
+  async handler(repo: TransactionalRepository<TicketStatsRecord>, eventData: BuilderEventData) {
+    const { typeId } = eventData;
+
+    async function ensureStats(): Promise<TicketStatsRecord> {
+      let stats = await repo.findOne_v2({ id: STATS_KEY });
       if (!stats) {
-        stats = { id: STATS_KEY, total: 0, byStatus: {}, byWorkflow: {}, totalResolved: 0, totalEscalated: 0 };
-        repo.create(stats);
+        stats = { id: STATS_KEY, total: 0, totalReceived: 0, totalAnalyzed: 0, totalMatched: 0, totalEscalated: 0, totalResolved: 0 };
+        repo.create_v2(stats);
       }
       return stats;
     }
 
-    const d = event.data;
-    switch (event.type) {
+    switch (typeId) {
       case "TicketReceived": {
-        const stats = ensureStats();
-        const byStatus = (stats.byStatus as Record<string, number>) || {};
-        byStatus["received"] = (byStatus["received"] || 0) + 1;
-        repo.updateOne(STATS_KEY, { total: (stats.total as number) + 1, byStatus });
+        const stats = await ensureStats();
+        repo.updateOne({ id: STATS_KEY }, { total: stats.total + 1, totalReceived: stats.totalReceived + 1 });
         break;
       }
       case "TicketAnalyzed": {
-        const stats = ensureStats();
-        const byStatus = (stats.byStatus as Record<string, number>) || {};
-        byStatus["received"] = Math.max(0, (byStatus["received"] || 0) - 1);
-        byStatus["analyzed"] = (byStatus["analyzed"] || 0) + 1;
-        repo.updateOne(STATS_KEY, { byStatus });
+        const stats = await ensureStats();
+        repo.updateOne({ id: STATS_KEY }, { totalAnalyzed: stats.totalAnalyzed + 1 });
         break;
       }
       case "TicketMatchedToWorkflow": {
-        const stats = ensureStats();
-        const byStatus = (stats.byStatus as Record<string, number>) || {};
-        byStatus["analyzed"] = Math.max(0, (byStatus["analyzed"] || 0) - 1);
-        byStatus["matched"] = (byStatus["matched"] || 0) + 1;
-        const byWorkflow = (stats.byWorkflow as Record<string, number>) || {};
-        byWorkflow[d.workflowId as string] = (byWorkflow[d.workflowId as string] || 0) + 1;
-        repo.updateOne(STATS_KEY, { byStatus, byWorkflow });
+        const stats = await ensureStats();
+        repo.updateOne({ id: STATS_KEY }, { totalMatched: stats.totalMatched + 1 });
         break;
       }
       case "TicketEscalated": {
-        const stats = ensureStats();
-        const byStatus = (stats.byStatus as Record<string, number>) || {};
-        // Decrement previous status (could be received, analyzed, or matched)
-        byStatus["escalated"] = (byStatus["escalated"] || 0) + 1;
-        repo.updateOne(STATS_KEY, { byStatus, totalEscalated: (stats.totalEscalated as number) + 1 });
+        const stats = await ensureStats();
+        repo.updateOne({ id: STATS_KEY }, { totalEscalated: stats.totalEscalated + 1 });
         break;
       }
       case "TicketResolved": {
-        const stats = ensureStats();
-        const byStatus = (stats.byStatus as Record<string, number>) || {};
-        byStatus["resolved"] = (byStatus["resolved"] || 0) + 1;
-        repo.updateOne(STATS_KEY, { byStatus, totalResolved: (stats.totalResolved as number) + 1 });
+        const stats = await ensureStats();
+        repo.updateOne({ id: STATS_KEY }, { totalResolved: stats.totalResolved + 1 });
         break;
       }
     }

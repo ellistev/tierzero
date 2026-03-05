@@ -1,44 +1,83 @@
-import type { ReadModelDefinition, StoredEvent, ReadModelRepo } from "../infra/interfaces";
+/**
+ * Tickets Read Model
+ * Queryable view of ticket data, projected from ticket events
+ */
 
-export const ticketsReadModel: ReadModelDefinition = {
+// Simplified types matching the infra pattern
+interface BuilderEventData {
+  streamId: string;
+  eventNumber: number;
+  position: unknown;
+  event: unknown;
+  eventId: string;
+  typeId: string;
+  creationTime: number;
+  metadata: Record<string, unknown>;
+}
+
+interface TransactionalRepository<T> {
+  create_v2(record: T): void;
+  updateOne(filter: Partial<T>, update: Partial<T>): void;
+  findOne_v2(filter: Partial<T>): Promise<T | null>;
+}
+
+export interface TicketRecord {
+  id: string;
+  title: string;
+  description: string;
+  source: string;
+  status: string;
+  workflowId: string | null;
+  confidence: number | null;
+  resolution: string | null;
+  escalationReason: string | null;
+  receivedAt: string;
+  analyzedAt: string | null;
+  matchedAt: string | null;
+  resolvedAt: string | null;
+  escalatedAt: string | null;
+}
+
+export const ticketsReadModel = {
+  name: "tickets",
   config: {
-    table: "tickets",
     key: "id",
+    indexes: ["status", "workflowId"],
     schema: {
-      id: "TEXT PRIMARY KEY",
-      title: "TEXT",
-      description: "TEXT",
-      source: "TEXT",
-      fields: "TEXT",
-      status: "TEXT",
-      workflowId: "TEXT",
-      confidence: "REAL",
-      resolution: "TEXT",
-      escalationReason: "TEXT",
-      receivedAt: "TEXT",
-      analyzedAt: "TEXT",
-      matchedAt: "TEXT",
-      resolvedAt: "TEXT",
-      escalatedAt: "TEXT",
+      id: { type: "string", nullable: false },
+      title: { type: "string", nullable: false },
+      description: { type: "string", nullable: true },
+      source: { type: "string", nullable: false },
+      status: { type: "string", nullable: false },
+      workflowId: { type: "string", nullable: true },
+      confidence: { type: "number", nullable: true },
+      resolution: { type: "string", nullable: true },
+      escalationReason: { type: "string", nullable: true },
+      receivedAt: { type: "string", nullable: false },
+      analyzedAt: { type: "string", nullable: true },
+      matchedAt: { type: "string", nullable: true },
+      resolvedAt: { type: "string", nullable: true },
+      escalatedAt: { type: "string", nullable: true },
     },
-    indexes: [["status"], ["workflowId"]],
   },
-  handler(repo: ReadModelRepo, event: StoredEvent) {
-    const d = event.data;
-    switch (event.type) {
+  lookups: {},
+  async handler(repo: TransactionalRepository<TicketRecord>, eventData: BuilderEventData) {
+    const { typeId, event } = eventData;
+    const e = event as Record<string, unknown>;
+
+    switch (typeId) {
       case "TicketReceived":
-        repo.create({
-          id: d.id,
-          title: d.title,
-          description: d.description,
-          source: d.source,
-          fields: d.fields,
+        repo.create_v2({
+          id: e.id as string,
+          title: e.title as string,
+          description: e.description as string,
+          source: e.source as string,
           status: "received",
           workflowId: null,
           confidence: null,
           resolution: null,
           escalationReason: null,
-          receivedAt: d.receivedAt,
+          receivedAt: e.receivedAt as string,
           analyzedAt: null,
           matchedAt: null,
           resolvedAt: null,
@@ -46,16 +85,29 @@ export const ticketsReadModel: ReadModelDefinition = {
         });
         break;
       case "TicketAnalyzed":
-        repo.updateOne(d.ticketId as string, { status: "analyzed", analyzedAt: d.analyzedAt });
+        repo.updateOne({ id: e.ticketId as string }, { status: "analyzed", analyzedAt: e.analyzedAt as string });
         break;
       case "TicketMatchedToWorkflow":
-        repo.updateOne(d.ticketId as string, { status: "matched", workflowId: d.workflowId, confidence: d.confidence, matchedAt: d.matchedAt });
+        repo.updateOne({ id: e.ticketId as string }, {
+          status: "matched",
+          workflowId: e.workflowId as string,
+          confidence: e.confidence as number,
+          matchedAt: e.matchedAt as string,
+        });
         break;
       case "TicketEscalated":
-        repo.updateOne(d.ticketId as string, { status: "escalated", escalationReason: d.reason, escalatedAt: d.escalatedAt });
+        repo.updateOne({ id: e.ticketId as string }, {
+          status: "escalated",
+          escalationReason: e.reason as string,
+          escalatedAt: e.escalatedAt as string,
+        });
         break;
       case "TicketResolved":
-        repo.updateOne(d.ticketId as string, { status: "resolved", resolution: d.resolution, resolvedAt: d.resolvedAt });
+        repo.updateOne({ id: e.ticketId as string }, {
+          status: "resolved",
+          resolution: e.resolution as string,
+          resolvedAt: e.resolvedAt as string,
+        });
         break;
     }
   },

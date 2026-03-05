@@ -48,11 +48,7 @@ export interface WorkflowContext {
   /** If true, log actions but don't execute them */
   dryRun?: boolean;
   /** CQRS command handler for emitting domain events (optional - available when CQRS infra is bootstrapped) */
-  commandHandler?: <TState extends Record<string, unknown>, TCommand>(
-    AggregateClass: { new (): import("../infra/aggregate").Aggregate<TState>; type: string },
-    aggregateId: string,
-    command: TCommand
-  ) => void;
+  commandHandler?: (AggregateClass: unknown, aggregateId: string, command: unknown, metadata?: unknown) => Promise<unknown>;
 }
 
 export interface WorkflowLogger {

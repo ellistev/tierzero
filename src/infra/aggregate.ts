@@ -1,9 +1,7 @@
-import { deepClone, getTypeName } from "./utils";
+import {deepClone, getTypeName} from "./utils";
 
-export interface ClassWithMeta<T> {
-  type: string;
-  new (...args: any[]): T;
-}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type CommandOrEventClass<T> = { type: string; new (...args: any[]): T };
 
 class Memento<TState extends Record<string, unknown> = Record<string, unknown>> {
   constructor(public readonly state: TState) {}
@@ -20,19 +18,38 @@ export class Aggregate<TState extends Record<string, unknown> = Record<string, u
     this._state = {} as TState;
   }
 
-  _registerCommandHandler<TCommand>(TCommand: ClassWithMeta<TCommand>, handler: (state: TState, cmd: TCommand) => unknown[]) {
-    this._commandHandlers.set(TCommand.type, handler as (state: TState, cmd: unknown) => unknown[]);
+  _registerCommandHandler<TCommand>(TCommand: CommandOrEventClass<TCommand>, handler: (state: TState, cmd: TCommand) => unknown[]) {
+    if (typeof TCommand === 'function') {
+      this._commandHandlers.set(TCommand.type, handler as (state: TState, cmd: unknown) => unknown[]);
+    } else if (typeof TCommand === 'string') {
+      this._commandHandlers.set(TCommand, handler as (state: TState, cmd: unknown) => unknown[]);
+    } else {
+      throw new TypeError('TCommand must be a command or a string');
+    }
   }
 
-  _registerEventHandler<TEvent>(TEvent: ClassWithMeta<TEvent>, handler: (state: TState, event: TEvent) => TState) {
-    this._eventHandlers.set(TEvent.type, handler as (state: TState, event: unknown) => TState);
+  _registerEventHandler<TEvent>(TEvent: CommandOrEventClass<TEvent>, handler: (state: TState, event: TEvent) => TState) {
+    if (typeof TEvent === 'function') {
+      this._eventHandlers.set(TEvent.type, handler as (state: TState, event: unknown) => TState);
+    } else if (typeof TEvent === 'string') {
+      this._eventHandlers.set(TEvent, handler as (state: TState, event: unknown) => TState);
+    } else {
+      throw new TypeError('TEvent must be an event or a string');
+    }
   }
 
+  /**
+   * @param {object} event
+   */
   hydrate<TEvent>(event: TEvent) {
     const handler = this._eventHandlers.get(getTypeName(event));
     if (handler) this._state = handler(Object.freeze(this._state), event);
   }
 
+  /**
+   * @param {object} command
+   * @returns {object[]}
+   */
   execute<TCommand>(command: TCommand) {
     const handler = this._commandHandlers.get(getTypeName(command));
     if (handler) return handler(Object.freeze(this._state), command);

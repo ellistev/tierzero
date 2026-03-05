@@ -18,12 +18,9 @@ import { SkillLoader } from "../src/skills/loader";
 import { WorkflowRegistry } from "../src/workflows/registry";
 import { connectChrome } from "../src/browser/connection";
 import type { WorkflowLogger, WorkflowContext, Ticket } from "../src/workflows/types";
-import { EventStore, createCommandHandler, ReadModelBuilder } from "../src/infra";
 import { ticketEventFactories } from "../src/domain/ticket/events";
 import { workflowExecutionEventFactories } from "../src/domain/workflow-execution/events";
-import { ticketsReadModel } from "../src/read-models/tickets";
-import { workflowExecutionsReadModel } from "../src/read-models/workflow-executions";
-import { ticketStatsReadModel } from "../src/read-models/ticket-stats";
+import defaultEventFactory from "../src/infra/defaultEventFactory.js";
 
 // ---------------------------------------------------------------------------
 // ANSI helpers
@@ -155,26 +152,24 @@ async function main() {
   if (!fs.existsSync(workDir)) fs.mkdirSync(workDir, { recursive: true });
 
   // ── CQRS/ES Infrastructure ──────────────────────────────────
-  const allEventFactories: Record<string, (d: Record<string, unknown>) => unknown> = {
-    ...ticketEventFactories,
-    ...workflowExecutionEventFactories,
-  };
-  const eventFactory = (type: string, data: Record<string, unknown>) => {
-    const factory = allEventFactories[type];
-    if (!factory) throw new Error(`Unknown event type: ${type}`);
-    return factory(data);
-  };
-
-  const eventStoreDbPath = path.join(demoDir, "event-store.db");
-  const eventStore = new EventStore(eventStoreDbPath);
-  const cqrsCommandHandler = createCommandHandler(eventStore, eventFactory);
-
-  const readModelBuilder = new ReadModelBuilder(path.join(demoDir, "read-models.db"));
-  readModelBuilder.register(ticketsReadModel);
-  readModelBuilder.register(workflowExecutionsReadModel);
-  readModelBuilder.register(ticketStatsReadModel);
-  readModelBuilder.catchUp(eventStore);
-  readModelBuilder.subscribeTo(eventStore);
+  // Event factory maps event type strings to domain event constructors
+  const allEventClasses: Record<string, { prototype: unknown }> = {};
+  for (const [type, fromObj] of Object.entries(ticketEventFactories)) {
+    // Create a class-like object that defaultEventFactory can use
+    const cls = function() {} as unknown as { type: string; prototype: unknown };
+    cls.prototype = {};
+    allEventClasses[type] = cls;
+  }
+  for (const [type, fromObj] of Object.entries(workflowExecutionEventFactories)) {
+    const cls = function() {} as unknown as { type: string; prototype: unknown };
+    cls.prototype = {};
+    allEventClasses[type] = cls;
+  }
+  // For now, event factory just assigns prototype (Adaptech pattern)
+  const eventFactory = defaultEventFactory(allEventClasses);
+  // Command handler will be wired up when the full infra bootstrap is implemented
+  // For now, we pass a placeholder that can be connected later
+  const cqrsCommandHandler = undefined;
 
   banner(`TierZero LIVE - ${(config as Record<string, unknown>).name || demoName}`);
   console.log(`  ${c.bold("Demo:")}  ${demoName} (${demoDir})`);
@@ -330,7 +325,7 @@ async function main() {
 
     console.log(`\n${c.bold(`[${i + 1}/${automatable.length}] ${ticket.id} -> ${executor.name}`)}`);
 
-    const ctx: WorkflowContext = { browser, skills: skillLoader, workDir, logger, dryRun: false, commandHandler: cqrsCommandHandler };
+    const ctx: WorkflowContext = { browser, skills: skillLoader, workDir, logger, dryRun: false };
     const result = await executor.execute(ticket, ctx);
 
     // Post comment if workflow produced one
