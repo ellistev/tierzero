@@ -12,6 +12,29 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/**
+ * Poll for g_form availability. Checks window.g_form first (direct URL),
+ * then falls back to searching inside shadow DOM iframes.
+ * Polls every 2s for up to 60s.
+ */
+async function waitForGForm(page: Page): Promise<void> {
+  const maxWait = 60000;
+  const interval = 2000;
+  const start = Date.now();
+  while (Date.now() - start < maxWait) {
+    const found = await page.evaluate(`(() => {
+      if (window.g_form) return true;
+      ${FIND_INCIDENT_IFRAME}
+      const iframe = findSnowIframe(document);
+      if (iframe && iframe.contentWindow && iframe.contentWindow.g_form) return true;
+      return false;
+    })()`);
+    if (found) return;
+    await sleep(interval);
+  }
+  throw new Error("Timed out waiting for g_form (60s)");
+}
+
 // ---------------------------------------------------------------------------
 // Shadow DOM iframe finders (evaluated in browser context)
 // ---------------------------------------------------------------------------
@@ -149,12 +172,12 @@ class ServiceNowSkill implements SkillProvider {
   }
 
   private getTicketUrl(ticket: { sysId?: string; incNumber?: string }): string {
+    // Use direct incident.do URL to avoid redirect through $pa_dashboard.do.
+    // With direct URL, g_form is on window directly (no iframe needed).
     if (ticket.sysId) {
-      return `${this.baseUrl}/now/nav/ui/classic/params/target/incident.do` +
-        `%3Fsys_id%3D${ticket.sysId}%26sysparm_view%3DDefault`;
+      return `${this.baseUrl}/incident.do?sys_id=${ticket.sysId}&sysparm_view=Default`;
     }
-    return `${this.baseUrl}/now/nav/ui/classic/params/target/incident.do` +
-      `%3Fsysparm_query%3Dnumber%3D${ticket.incNumber}%26sysparm_view%3DDefault`;
+    return `${this.baseUrl}/incident.do?sysparm_query=number%3D${ticket.incNumber}&sysparm_view=Default`;
   }
 
   private async ensureSession(
@@ -202,45 +225,80 @@ class ServiceNowSkill implements SkillProvider {
     opts?: { onWaiting?: () => void; onLoggedIn?: () => void }
   ): Promise<TicketSummary[]> {
     const session = await this.ensureSession(browser, opts);
+    const allTickets: TicketSummary[] = [];
 
     await session.page.goto(this.getListUrl(), { waitUntil: "domcontentloaded" });
     await sleep(7000);
 
-    const rawList = await session.page.evaluate(`(() => {
-      ${FIND_LIST_IFRAME}
-      const iframe = findSnowListIframe(document);
-      if (!iframe || !iframe.contentDocument) return { error: 'no list iframe found' };
-      const doc = iframe.contentDocument;
-      const rows = [...doc.querySelectorAll('tr.list_row, tr[record]')];
-      return rows.map(row => {
-        const links = [...row.querySelectorAll('a')];
-        const incLink = links.find(a => a.textContent.trim().match(/^INC\\d+$/));
-        const incNumber = incLink ? incLink.textContent.trim() : '';
-        const sysId = row.getAttribute('sys_id') || '';
-        const cells = [...row.querySelectorAll('td')];
-        const shortDesc = cells.length > 5 ? cells[cells.length - 1]?.textContent?.trim() : '';
-        return { incNumber, sysId, shortDesc };
-      }).filter(t => t.incNumber);
-    })()`) as TicketSummary[] | { error: string };
+    while (true) {
+      const rawList = await session.page.evaluate(`(() => {
+        ${FIND_LIST_IFRAME}
+        const iframe = findSnowListIframe(document);
+        if (!iframe || !iframe.contentDocument) return { error: 'no list iframe found' };
+        const doc = iframe.contentDocument;
+        const rows = [...doc.querySelectorAll('tr.list_row, tr[record]')];
+        return rows.map(row => {
+          const links = [...row.querySelectorAll('a')];
+          const incLink = links.find(a => a.textContent.trim().match(/^INC\\d+$/));
+          const incNumber = incLink ? incLink.textContent.trim() : '';
+          const sysId = row.getAttribute('sys_id') || '';
+          const cells = [...row.querySelectorAll('td')];
+          const shortDesc = cells.length > 5 ? cells[cells.length - 1]?.textContent?.trim() : '';
+          return { incNumber, sysId, shortDesc };
+        }).filter(t => t.incNumber);
+      })()`) as TicketSummary[] | { error: string };
 
-    if (!Array.isArray(rawList)) {
-      throw new Error(`Failed to scrape ticket list: ${(rawList as { error: string }).error}`);
+      if (!Array.isArray(rawList)) {
+        throw new Error(`Failed to scrape ticket list: ${(rawList as { error: string }).error}`);
+      }
+      allTickets.push(...rawList);
+
+      // Check pagination: text is in span.sr-only inside span[id$="_vcr"]
+      // Format: "Showing rows X to Y of Z"
+      // Next button: button[name="vcr_next"][title="Next page"] (disabled when on last page)
+      const hasMore = await session.page.evaluate(`(() => {
+        ${FIND_LIST_IFRAME}
+        const iframe = findSnowListIframe(document);
+        if (!iframe || !iframe.contentDocument) return false;
+        const doc = iframe.contentDocument;
+        const nextBtn = doc.querySelector('button[name="vcr_next"][title="Next page"]');
+        return nextBtn && !nextBtn.disabled;
+      })()`);
+
+      if (!hasMore) break;
+
+      // Click next page
+      await session.page.evaluate(`(() => {
+        ${FIND_LIST_IFRAME}
+        const iframe = findSnowListIframe(document);
+        if (!iframe || !iframe.contentDocument) return;
+        const doc = iframe.contentDocument;
+        const nextBtn = doc.querySelector('button[name="vcr_next"][title="Next page"]');
+        if (nextBtn) nextBtn.click();
+      })()`);
+      await sleep(5000);
     }
 
-    return rawList;
+    return allTickets;
   }
 
   async readTicketDetail(ticket: TicketSummary): Promise<TicketDetail> {
     if (!this.session) throw new Error("No active session. Call listTickets first.");
 
     await this.session.page.goto(this.getTicketUrl(ticket), { waitUntil: "domcontentloaded" });
-    await sleep(5000);
+    await waitForGForm(this.session.page);
 
     const raw = await this.session.page.evaluate(`(() => {
-      ${FIND_INCIDENT_IFRAME}
-      const iframe = findSnowIframe(document);
-      if (!iframe || !iframe.contentDocument) return { error: 'no iframe' };
-      const doc = iframe.contentDocument;
+      // Check window.g_form first (direct URL), fall back to iframe
+      let doc = document;
+      let win = window;
+      if (!window.g_form) {
+        ${FIND_INCIDENT_IFRAME}
+        const iframe = findSnowIframe(document);
+        if (!iframe || !iframe.contentDocument) return { error: 'no iframe and no window.g_form' };
+        doc = iframe.contentDocument;
+        win = iframe.contentWindow;
+      }
 
       const desc = (doc.querySelector('textarea[id*="description"]') || {}).value || '';
       const num = (doc.querySelector('input[id*="number"]') || {}).value || '';
@@ -255,7 +313,7 @@ class ServiceNowSkill implements SkillProvider {
         att = { name: a.textContent.trim(), sysId: m ? m[1] : null };
       }
 
-      return { num, desc: desc.substring(0, 5000), att };
+      return { num, desc, att };
     })()`) as {
       error?: string;
       num: string;
@@ -287,14 +345,19 @@ class ServiceNowSkill implements SkillProvider {
     if (!this.session || !ticket.attachmentSysId) return null;
 
     await this.session.page.goto(this.getTicketUrl(ticket), { waitUntil: "domcontentloaded" });
-    await sleep(5000);
+    await waitForGForm(this.session.page);
 
     const base64 = await this.session.page.evaluate(`(() => {
-      ${FIND_INCIDENT_IFRAME}
-      const iframe = findSnowIframe(document);
-      if (!iframe) return null;
+      // Use window.fetch when on direct URL, fall back to iframe context
+      let fetchCtx = window;
+      if (!window.g_form) {
+        ${FIND_INCIDENT_IFRAME}
+        const iframe = findSnowIframe(document);
+        if (!iframe) return null;
+        fetchCtx = iframe.contentWindow;
+      }
       return new Promise(resolve => {
-        iframe.contentWindow.fetch('${this.baseUrl}/sys_attachment.do?sys_id=${ticket.attachmentSysId}')
+        fetchCtx.fetch('${this.baseUrl}/sys_attachment.do?sys_id=${ticket.attachmentSysId}')
           .then(r => r.text())
           .then(text => resolve(btoa(unescape(encodeURIComponent(text)))))
           .catch(() => resolve(null));
@@ -315,14 +378,18 @@ class ServiceNowSkill implements SkillProvider {
 
     const page = await this.session.context.newPage();
     await page.goto(this.getTicketUrl(ticket), { waitUntil: "domcontentloaded" });
-    await sleep(6000);
+    await waitForGForm(page);
 
     const result = await page.evaluate(`(() => {
-      ${FIND_INCIDENT_IFRAME}
-      const iframe = findSnowIframe(document);
-      if (!iframe || !iframe.contentDocument) return 'error: no iframe';
-      const win = iframe.contentWindow;
-      if (!win.g_form) return 'error: no g_form';
+      // Check window.g_form first (direct URL), fall back to iframe
+      let win = window;
+      if (!window.g_form) {
+        ${FIND_INCIDENT_IFRAME}
+        const iframe = findSnowIframe(document);
+        if (!iframe || !iframe.contentDocument) return 'error: no iframe and no window.g_form';
+        win = iframe.contentWindow;
+        if (!win.g_form) return 'error: no g_form';
+      }
 
       win.g_form.setValue('${field}', ${JSON.stringify(message)});
 
