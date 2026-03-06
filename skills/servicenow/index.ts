@@ -243,7 +243,17 @@ class ServiceNowSkill implements SkillProvider {
           const incNumber = incLink ? incLink.textContent.trim() : '';
           const sysId = row.getAttribute('sys_id') || '';
           const cells = [...row.querySelectorAll('td')];
-          const shortDesc = cells.length > 5 ? cells[cells.length - 1]?.textContent?.trim() : '';
+          // Find short description by column header index or known position
+          // Column order: checkbox, Number, Priority, Opened, Caller, Short description, Assignment group, Assigned to
+          // Short desc is typically the 6th visible cell (index 5) but safer to search for it
+          let shortDesc = '';
+          const headerRow = doc.querySelector('tr.column_head, tr.list_header_row');
+          if (headerRow) {
+            const headers = [...headerRow.querySelectorAll('th')];
+            const descIdx = headers.findIndex(h => h.textContent?.toLowerCase().includes('short description'));
+            if (descIdx >= 0 && cells[descIdx]) shortDesc = cells[descIdx].textContent?.trim() || '';
+          }
+          if (!shortDesc && cells.length > 5) shortDesc = cells[5]?.textContent?.trim() || '';
           return { incNumber, sysId, shortDesc };
         }).filter(t => t.incNumber);
       })()`) as TicketSummary[] | { error: string };

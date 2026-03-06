@@ -16,13 +16,37 @@
 import "dotenv/config";
 import path from "path";
 import fs from "fs";
+import websql from "websql";
 import { SkillLoader } from "../src/skills/loader";
 import { WorkflowRegistry } from "../src/workflows/registry";
 import { connectChrome } from "../src/browser/connection";
 import type { WorkflowLogger, WorkflowContext, Ticket } from "../src/workflows/types";
+import { Ticket as TicketAggregate } from "../src/domain/ticket/Ticket";
+import { ReceiveTicket, AnalyzeTicket, MatchToWorkflow, EscalateTicket, ResolveTicket, PostComment } from "../src/domain/ticket/commands";
 import { ticketEventFactories } from "../src/domain/ticket/events";
+import { WorkflowExecution as WorkflowExecutionAggregate } from "../src/domain/workflow-execution/WorkflowExecution";
+import { StartWorkflowExecution, StartStep, CompleteStep, FailStep, SkipStep, CompleteExecution, FailExecution } from "../src/domain/workflow-execution/commands";
 import { workflowExecutionEventFactories } from "../src/domain/workflow-execution/events";
+import { ticketsReadModel } from "../src/read-models/tickets";
+import { workflowExecutionsReadModel } from "../src/read-models/workflow-executions";
+import { ticketStatsReadModel } from "../src/read-models/ticket-stats";
 import defaultEventFactory from "../src/infra/defaultEventFactory.js";
+import KurrentDBEventStore from "../src/infra/kurrentdb/index.js";
+import DBPool from "../src/infra/websqldb/DBPool.js";
+import Mapper from "../src/infra/websqldb/Mapper.js";
+import CheckPointStore from "../src/infra/websqldb/CheckPointStore.js";
+import { buildModelDefs } from "../src/infra/readModels.js";
+import ReadRepository from "../src/infra/ReadRepository.js";
+import TransactionalRepository from "../src/infra/TransactionalRepository.js";
+import Batcher from "../src/infra/Batcher.js";
+import { factory as builderFactory } from "../src/infra/builder.js";
+import EventStoreWithConversionWrapper from "../src/infra/EventStoreWithConversionWrapper.js";
+import Subscriber from "../src/infra/Subscriber.js";
+import commandHandlerFactory from "../src/infra/commandHandler.js";
+import NullAggregateCache from "../src/infra/in-process/NullAggregateCache.js";
+import NullSnapshotStore from "../src/infra/in-process/NullSnapshotStore.js";
+import NullMetrics from "../src/infra/metrics/NullMetrics.js";
+// getTypeName no longer needed - KurrentDB handles type names internally
 
 // ---------------------------------------------------------------------------
 // ANSI helpers
@@ -204,19 +228,92 @@ async function main() {
   if (!fs.existsSync(workDir)) fs.mkdirSync(workDir, { recursive: true });
 
   // ── CQRS/ES Infrastructure ──────────────────────────────────
-  const allEventClasses: Record<string, { prototype: unknown }> = {};
+  const allEventClasses: Record<string, { type: string; prototype: Record<string, unknown> }> = {};
   for (const [type] of Object.entries(ticketEventFactories)) {
-    const cls = function() {} as unknown as { type: string; prototype: unknown };
-    cls.prototype = {};
+    const cls = function() {} as unknown as { type: string; prototype: Record<string, unknown> };
+    cls.type = type;
+    cls.prototype = { constructor: cls };
     allEventClasses[type] = cls;
   }
   for (const [type] of Object.entries(workflowExecutionEventFactories)) {
-    const cls = function() {} as unknown as { type: string; prototype: unknown };
-    cls.prototype = {};
+    const cls = function() {} as unknown as { type: string; prototype: Record<string, unknown> };
+    cls.type = type;
+    cls.prototype = { constructor: cls };
     allEventClasses[type] = cls;
   }
   const eventFactory = defaultEventFactory(allEventClasses);
-  const cqrsCommandHandler = undefined;
+
+  // Initialize event store (SQLite-backed, persisted to disk)
+  const dataDir = path.join(demoDir, "data");
+  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+  const rmDbPath = path.join(dataDir, "readmodels.db");
+
+  // KurrentDB event store (Docker: localhost:2113, insecure mode)
+  const kurrentConnectionString = process.env.KURRENTDB_URL || "esdb://localhost:2113?tls=false";
+  const eventStore = new KurrentDBEventStore(kurrentConnectionString, console);
+  await eventStore.ensureCreated();
+
+  // Identity event converter (no conversions needed)
+  const eventConverter = (esData: unknown) => esData;
+  const eventStoreWithConversion = new EventStoreWithConversionWrapper(eventStore, eventConverter);
+
+  // Read model DB
+  const readModels = [
+    { name: ticketsReadModel.name, ...ticketsReadModel },
+    { name: workflowExecutionsReadModel.name, ...workflowExecutionsReadModel },
+    { name: ticketStatsReadModel.name, ...ticketStatsReadModel },
+  ];
+  const modelDefs = buildModelDefs(readModels);
+  const rmDb = websql(rmDbPath, "1.0", "", 0);
+  const dbPool = new DBPool(rmDb);
+  const mapper = new Mapper(modelDefs, console);
+
+  // Ensure read model tables exist
+  for (const rm of readModels) {
+    await mapper.tryCreateModel(dbPool, rm.name);
+  }
+
+  // Read model builder + subscriber
+  const metrics = new NullMetrics();
+  const checkPointStoreFactory = (key: string) => new CheckPointStore(dbPool, key);
+  const transactionalRepositoryFactory = (modelName: string, batcher: unknown, readRepo?: unknown) =>
+    new TransactionalRepository(mapper, modelName, readRepo || new ReadRepository(mapper, (batcher as { connection: unknown }).connection, console), batcher, console);
+  const readRepository = new ReadRepository(mapper, dbPool, console);
+  const builder = builderFactory(
+    { dbPool, readRepository, transactionalRepositoryFactory, logger: console, config: {}, metrics },
+    eventStoreWithConversion
+  );
+  const lastCheckPointStore = checkPointStoreFactory("lastCheckPoint");
+  const updateLastCheckPoint = (cp: unknown) => lastCheckPointStore.put(cp);
+  const subscriber = new Subscriber("readModels", eventStore, updateLastCheckPoint, null, metrics, console);
+  subscriber.addHandler((esData: unknown) => builder.processEvent(readModels, esData));
+
+  // Start subscriber from last checkpoint
+  const rawLastCheckpoint = await lastCheckPointStore.get();
+  const lastCheckPoint = rawLastCheckpoint && eventStore.createPosition(rawLastCheckpoint);
+  await subscriber.startFrom(lastCheckPoint);
+
+  // Command handler (write side)
+  const aggregateCache = new NullAggregateCache();
+  const snapshotStore = new NullSnapshotStore();
+  const cqrsCommandHandler = commandHandlerFactory(
+    { commandHandler: { snapshotThreshold: 1024, readBatchSize: 512 } },
+    eventFactory,
+    eventStoreWithConversion,
+    aggregateCache,
+    snapshotStore,
+    console,
+    metrics
+  );
+
+  // Helper: dispatch a command, swallowing errors to not break the pipeline
+  async function dispatch(TAgg: unknown, aggregateId: string, command: unknown) {
+    try {
+      await cqrsCommandHandler(TAgg, aggregateId, command);
+    } catch (err) {
+      logger.warn(`CQRS dispatch failed (${(command as { constructor: { type: string } }).constructor.type}): ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   const modeLabel = dryRun ? "DRY RUN" : gatherOnly ? "GATHER ONLY" : resumeMode ? "RESUME" : updateOnly ? "UPDATE ONLY" : "LIVE EXECUTION";
   banner(`TierZero LIVE - ${(config as Record<string, unknown>).name || demoName}`);
@@ -485,6 +582,11 @@ async function main() {
       };
       tickets.push(ticket);
       console.log(`  ${c.dim(ticket.id)}: ${ticket.title}`);
+
+      // CQRS: ReceiveTicket
+      await dispatch(TicketAggregate, ticket.id, new ReceiveTicket(
+        ticket.id, ticket.title, ticket.description, ticket.source, ticket.fields, new Date().toISOString()
+      ));
     } catch (err) {
       logger.warn(`Could not read ${raw.incNumber}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -513,6 +615,23 @@ async function main() {
 
     console.log(`  ${c.bold(ticket.id)}: ${badge} ${executorId ? `[${executorId}]` : ""}`);
     plans.push({ ticket, executorId, decision });
+
+    // CQRS: AnalyzeTicket
+    const now = new Date().toISOString();
+    await dispatch(TicketAggregate, ticket.id, new AnalyzeTicket(
+      ticket.id, ticket.fields, decision, now
+    ));
+
+    // CQRS: MatchToWorkflow or EscalateTicket
+    if (executorId) {
+      await dispatch(TicketAggregate, ticket.id, new MatchToWorkflow(
+        ticket.id, executorId, match?.confidence ?? 1.0, now
+      ));
+    } else {
+      await dispatch(TicketAggregate, ticket.id, new EscalateTicket(
+        ticket.id, decision === "skip" ? "No matching workflow" : decision, now
+      ));
+    }
   }
 
   const automatable = plans.filter(p => p.decision === "execute" && p.executorId);
@@ -555,9 +674,39 @@ async function main() {
 
     console.log(`\n${c.bold(`[${i + 1}/${automatable.length}] ${ticket.id} -> ${executor.name}`)}`);
 
+    // CQRS: StartWorkflowExecution
+    const execId = `wf-exec-${ticket.id}-${Date.now()}`;
+    await dispatch(WorkflowExecutionAggregate, execId, new StartWorkflowExecution(
+      execId, ticket.id, executorId!, new Date().toISOString()
+    ));
+
     // Default browser context for DRIVE admin operations
     const ctx: WorkflowContext = { browser, skills: skillLoader, workDir, logger, dryRun: false };
     const result = await executor.execute(ticket, ctx);
+
+    // CQRS: Emit step events
+    for (const step of result.steps) {
+      const stepNow = new Date().toISOString();
+      await dispatch(WorkflowExecutionAggregate, execId, new StartStep(execId, step.name, step.detail || "", stepNow));
+      if (step.status === "completed") {
+        await dispatch(WorkflowExecutionAggregate, execId, new CompleteStep(execId, step.name, step.detail || "", stepNow));
+      } else if (step.status === "failed") {
+        await dispatch(WorkflowExecutionAggregate, execId, new FailStep(execId, step.name, step.detail || "", stepNow));
+      } else if (step.status === "skipped") {
+        await dispatch(WorkflowExecutionAggregate, execId, new SkipStep(execId, step.name, step.detail || "", stepNow));
+      }
+    }
+
+    // CQRS: Complete or fail execution
+    if (result.success) {
+      await dispatch(WorkflowExecutionAggregate, execId, new CompleteExecution(
+        execId, result.summary || "", {}, new Date().toISOString()
+      ));
+    } else {
+      await dispatch(WorkflowExecutionAggregate, execId, new FailExecution(
+        execId, result.error || result.summary || "unknown error", new Date().toISOString()
+      ));
+    }
 
     // Find this item in the gather log and update it
     const logItem = gatherLog.items.find(item => item.id === ticket.id);
@@ -571,6 +720,11 @@ async function main() {
 
     // Post comment if workflow produced one - use incognito context for ServiceNow
     if (result.ticketComment) {
+      // CQRS: PostTicketComment
+      await dispatch(TicketAggregate, ticket.id, new PostComment(
+        ticket.id, result.ticketComment, !!result.commentIsInternal, new Date().toISOString()
+      ));
+
       const commentFn = servicenowSkill.provider.getCapability("ticket-comment");
       if (commentFn) {
         try {
@@ -594,6 +748,13 @@ async function main() {
       }
     }
 
+    // CQRS: ResolveTicket (if successful)
+    if (result.success) {
+      await dispatch(TicketAggregate, ticket.id, new ResolveTicket(
+        ticket.id, result.summary || "Automated resolution", new Date().toISOString()
+      ));
+    }
+
     if (result.success) {
       success++;
       console.log(`  ${c.green("OK")} ${result.summary}`);
@@ -609,6 +770,32 @@ async function main() {
 
     // Save gather log after EACH item
     saveGatherLog(logPath, gatherLog);
+  }
+
+  // ── Event Store Summary ───────────────────────────────────────
+  banner("Event Store Summary");
+
+  // Wait briefly for subscriber to process remaining events
+  await new Promise(resolve => setTimeout(resolve, 500));
+
+  try {
+    const statsRepo = new ReadRepository(mapper, dbPool, console);
+    const stats = await statsRepo.findOne_v2("ticket_stats", { id: "global" });
+    const allExecs = await statsRepo.findAll("workflow_executions");
+    const completedExecs = allExecs.filter((e: Record<string, unknown>) => e.status === "completed").length;
+    const failedExecs = allExecs.filter((e: Record<string, unknown>) => e.status === "failed").length;
+    const lastPos = await eventStore.lastPosition();
+
+    console.log(`  Tickets received:       ${stats?.totalReceived ?? 0}`);
+    console.log(`  Tickets analyzed:       ${stats?.totalAnalyzed ?? 0}`);
+    console.log(`  Workflows matched:      ${stats?.totalMatched ?? 0}`);
+    console.log(`  Tickets escalated:      ${stats?.totalEscalated ?? 0}`);
+    console.log(`  Executions completed:   ${completedExecs}`);
+    console.log(`  Executions failed:      ${failedExecs}`);
+    console.log(`  Tickets resolved:       ${stats?.totalResolved ?? 0}`);
+    console.log(`  Events emitted:         ${lastPos?.value ?? 0}`);
+  } catch (err) {
+    logger.warn(`Could not read event store summary: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   banner("Complete");

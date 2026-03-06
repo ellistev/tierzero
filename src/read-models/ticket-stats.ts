@@ -38,7 +38,7 @@ export const ticketStatsReadModel = {
   config: {
     key: "id",
     schema: {
-      id: { type: "string", nullable: false },
+      id: { type: "string", nullable: false, maxLength: 32 },
       total: { type: "number", nullable: false },
       totalReceived: { type: "number", nullable: false },
       totalAnalyzed: { type: "number", nullable: false },
