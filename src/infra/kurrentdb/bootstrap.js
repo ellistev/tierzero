@@ -12,7 +12,7 @@ export default async function factory(services) {
   const esConfig = config.kurrentdb || config.eventStore;
   if (!esConfig) throw new Error('missing kurrentdb/eventStore config section');
   
-  const connectionString = esConfig.connectionString || 'esdb://localhost:2113?tls=false';
+  const connectionString = esConfig.connectionString || 'kurrentdb://localhost:2113?tls=false';
   const readBatchSize = esConfig.readBatchSize || 512;
   
   logger.info(`📦 Connecting to KurrentDB: ${connectionString}`);

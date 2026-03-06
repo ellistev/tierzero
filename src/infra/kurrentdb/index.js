@@ -1,4 +1,4 @@
-import { EventStoreDBClient, jsonEvent, FORWARDS, START, ANY, NO_STREAM } from '@eventstore/db-client';
+import { KurrentDBClient, jsonEvent, FORWARDS, START, ANY, NO_STREAM } from '@kurrent/kurrentdb-client';
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
 import Position from '../websqles/Position.js';
@@ -16,7 +16,7 @@ export default class KurrentDBEventStore extends EventEmitter {
   constructor(connectionString, logger) {
     super();
     this._logger = logger;
-    this._client = EventStoreDBClient.connectionString(connectionString);
+    this._client = KurrentDBClient.connectionString(connectionString);
   }
 
   async read(streamId, start = 0) {

@@ -28,7 +28,7 @@
     "live:sgi:gather": "tsx demo/run-live.ts --demo sgi --gather-only"
   },
   "dependencies": {
-    "@eventstore/db-client": "^6.2.1",
+    "@kurrent/kurrentdb-client": "^1.1.0",
     "@langchain/community": "^1.1.20",
     "@langchain/core": "^1.1.29",
     "@langchain/langgraph": "^1.2.0",

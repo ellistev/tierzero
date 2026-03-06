@@ -249,7 +249,7 @@ async function main() {
   const rmDbPath = path.join(dataDir, "readmodels.db");
 
   // KurrentDB event store (Docker: localhost:2113, insecure mode)
-  const kurrentConnectionString = process.env.KURRENTDB_URL || "esdb://localhost:2113?tls=false";
+  const kurrentConnectionString = process.env.KURRENTDB_URL || "kurrentdb://localhost:2113?tls=false";
   const eventStore = new KurrentDBEventStore(kurrentConnectionString, console);
   await eventStore.ensureCreated();
 
