@@ -16,6 +16,7 @@ interface BuilderEventData {
 
 interface TransactionalRepository<T> {
   create_v2(record: T): void;
+  upsert(record: T): void;
   updateOne(filter: Partial<T>, update: Partial<T>): void;
   findOne_v2(filter: Partial<T>): Promise<T | null>;
 }
@@ -58,7 +59,7 @@ export const workflowExecutionsReadModel = {
 
     switch (typeId) {
       case "WorkflowExecutionStarted":
-        repo.create_v2({
+        repo.upsert({
           executionId: e.executionId as string,
           ticketId: e.ticketId as string,
           workflowId: e.workflowId as string,

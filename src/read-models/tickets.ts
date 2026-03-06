@@ -17,6 +17,7 @@ interface BuilderEventData {
 
 interface TransactionalRepository<T> {
   create_v2(record: T): void;
+  upsert(record: T): void;
   updateOne(filter: Partial<T>, update: Partial<T>): void;
   findOne_v2(filter: Partial<T>): Promise<T | null>;
 }
@@ -67,7 +68,7 @@ export const ticketsReadModel = {
 
     switch (typeId) {
       case "TicketReceived":
-        repo.create_v2({
+        repo.upsert({
           id: e.id as string,
           title: e.title as string,
           description: e.description as string,

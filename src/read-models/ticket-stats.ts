@@ -55,7 +55,7 @@ export const ticketStatsReadModel = {
       let stats = await repo.findOne_v2({ id: STATS_KEY });
       if (!stats) {
         stats = { id: STATS_KEY, total: 0, totalReceived: 0, totalAnalyzed: 0, totalMatched: 0, totalEscalated: 0, totalResolved: 0 };
-        repo.create_v2(stats);
+        repo.upsert(stats);
       }
       return stats;
     }
