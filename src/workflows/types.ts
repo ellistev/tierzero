@@ -12,6 +12,7 @@
 
 import type { Browser } from "playwright";
 import type { SkillLoader } from "../skills/loader";
+import type { IntentEngine } from "../intents/engine";
 
 export type WorkflowDecision =
   | "execute"     // Workflow can handle this ticket
@@ -49,6 +50,8 @@ export interface WorkflowContext {
   dryRun?: boolean;
   /** CQRS command handler for emitting domain events (optional - available when CQRS infra is bootstrapped) */
   commandHandler?: (AggregateClass: unknown, aggregateId: string, command: unknown, metadata?: unknown) => Promise<unknown>;
+  /** Intent execution engine for adaptive UI automation (optional) */
+  intentEngine?: IntentEngine;
 }
 
 export interface WorkflowLogger {
