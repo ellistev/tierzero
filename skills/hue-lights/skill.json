@@ -1,0 +1,43 @@
+{
+  "name": "hue-lights",
+  "version": "1.0.0",
+  "description": "Philips Hue light control via Hue Remote API. On/off, brightness, color (xy), color temperature, alert/flash by ID or room.",
+  "capabilities": [
+    "lights-list",
+    "light-status",
+    "light-set-state",
+    "lights-set-room"
+  ],
+  "config": {
+    "clientId": {
+      "type": "string",
+      "required": true,
+      "description": "Hue Remote API client ID",
+      "env": "HUE_CLIENT_ID"
+    },
+    "clientSecret": {
+      "type": "string",
+      "required": true,
+      "description": "Hue Remote API client secret",
+      "env": "HUE_CLIENT_SECRET"
+    },
+    "accessToken": {
+      "type": "string",
+      "required": true,
+      "description": "Hue OAuth2 access token",
+      "env": "HUE_ACCESS_TOKEN"
+    },
+    "refreshToken": {
+      "type": "string",
+      "required": true,
+      "description": "Hue OAuth2 refresh token",
+      "env": "HUE_REFRESH_TOKEN"
+    }
+  },
+  "mcpTools": [
+    "hue_lights_list",
+    "hue_light_status",
+    "hue_light_set_state",
+    "hue_lights_set_room"
+  ]
+}

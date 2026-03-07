@@ -1,0 +1,49 @@
+{
+  "name": "nest-camera",
+  "version": "1.0.0",
+  "description": "Google Nest camera and doorbell control via Smart Device Management API. Camera info, live streams, and event detection.",
+  "capabilities": [
+    "camera-list",
+    "camera-status",
+    "camera-livestream",
+    "camera-events"
+  ],
+  "config": {
+    "projectId": {
+      "type": "string",
+      "required": true,
+      "description": "Google SDM project ID",
+      "env": "NEST_PROJECT_ID"
+    },
+    "clientId": {
+      "type": "string",
+      "required": true,
+      "description": "Google OAuth2 client ID",
+      "env": "NEST_CLIENT_ID"
+    },
+    "clientSecret": {
+      "type": "string",
+      "required": true,
+      "description": "Google OAuth2 client secret",
+      "env": "NEST_CLIENT_SECRET"
+    },
+    "accessToken": {
+      "type": "string",
+      "required": true,
+      "description": "Google OAuth2 access token",
+      "env": "NEST_ACCESS_TOKEN"
+    },
+    "refreshToken": {
+      "type": "string",
+      "required": true,
+      "description": "Google OAuth2 refresh token",
+      "env": "NEST_REFRESH_TOKEN"
+    }
+  },
+  "mcpTools": [
+    "nest_camera_list",
+    "nest_camera_status",
+    "nest_camera_livestream",
+    "nest_camera_events"
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "name": "nest-thermostat",
+  "version": "1.0.0",
+  "description": "Google Nest thermostat control via Smart Device Management API. Supports temperature, mode, eco, and fan control.",
+  "capabilities": [
+    "thermostat-status",
+    "thermostat-set-temperature",
+    "thermostat-set-mode",
+    "thermostat-set-eco",
+    "thermostat-set-fan"
+  ],
+  "config": {
+    "projectId": {
+      "type": "string",
+      "required": true,
+      "description": "Google SDM project ID",
+      "env": "NEST_PROJECT_ID"
+    },
+    "clientId": {
+      "type": "string",
+      "required": true,
+      "description": "Google OAuth2 client ID",
+      "env": "NEST_CLIENT_ID"
+    },
+    "clientSecret": {
+      "type": "string",
+      "required": true,
+      "description": "Google OAuth2 client secret",
+      "env": "NEST_CLIENT_SECRET"
+    },
+    "accessToken": {
+      "type": "string",
+      "required": true,
+      "description": "Google OAuth2 access token",
+      "env": "NEST_ACCESS_TOKEN"
+    },
+    "refreshToken": {
+      "type": "string",
+      "required": true,
+      "description": "Google OAuth2 refresh token",
+      "env": "NEST_REFRESH_TOKEN"
+    }
+  },
+  "mcpTools": [
+    "nest_thermostat_status",
+    "nest_thermostat_set_temperature",
+    "nest_thermostat_set_mode",
+    "nest_thermostat_set_eco",
+    "nest_thermostat_set_fan"
+  ]
+}
