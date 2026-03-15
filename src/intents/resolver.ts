@@ -1,27 +1,61 @@
-import type { Page } from "playwright";
-import type { Intent, ResolvedIntent, ResolutionStrategy, SelectorCacheQuery, LLMProvider } from "./types";
+/**
+ * CoordinateStrategy - Falls back to coordinate-based interaction
+ * when selector-based approaches all fail.
+ */
+
+import type {
+  Intent,
+  ResolvedIntent,
+  Strategy,
+  StrategyContext,
+} from "./types";
 
 /**
- * Cached strategy: tries a previously-working selector from the read model.
+ * CoordinateStrategy takes a screenshot, asks the LLM to identify
+ * element coordinates, and clicks at those coordinates.
  */
-export class CachedStrategy implements ResolutionStrategy {
-  readonly method = "cached" as const;
+export class CoordinateStrategy implements Strategy {
+  readonly name = "coordinate";
 
-  constructor(private readonly cache: SelectorCacheQuery) {}
+  async resolve(
+    intent: Intent,
+    context: StrategyContext
+  ): Promise<ResolvedIntent | null> {
+    if (!context.llm?.findCoordinatesFromScreenshot) return null;
 
-  async resolve(intent: Intent, page: Page): Promise<ResolvedIntent | null> {
-    const cached = await this.cache.get(intent.page, intent.name);
-    if (!cached) return null;
-
-    const start = Date.now();
     try {
-      const el = await page.locator(cached.selector).first();
-      const visible = await el.isVisible({ timeout: 3000 });
-      if (!visible) return null;
+      // Get viewport size for coordinate scaling
+      const viewport = context.page.viewportSize();
+      if (!viewport) return null;
+
+      // Take screenshot
+      const buf = await context.page.screenshot({ type: "png" });
+      const base64 = buf.toString("base64");
+
+      // Ask LLM for coordinates
+      const coords = await context.llm.findCoordinatesFromScreenshot(
+        intent,
+        base64,
+        viewport
+      );
+
+      if (!coords) return null;
+
+      // Validate coordinates are within viewport
+      if (
+        coords.x < 0 ||
+        coords.y < 0 ||
+        coords.x > viewport.width ||
+        coords.y > viewport.height
+      ) {
+        return null;
+      }
+
       return {
-        selector: cached.selector,
-        method: "cached",
-        durationMs: Date.now() - start,
+        intent,
+        coordinates: { x: coords.x, y: coords.y },
+        confidence: 0.5,
+        strategy: this.name,
       };
     } catch {
       return null;
@@ -30,146 +64,83 @@ export class CachedStrategy implements ResolutionStrategy {
 }
 
 /**
- * Aria strategy: uses accessibility roles/labels to find elements.
- * Does not require LLM - works by mapping intent goals to aria queries.
+ * Execute a resolved intent on the page.
+ * Handles both selector-based and coordinate-based interactions.
  */
-export class AriaStrategy implements ResolutionStrategy {
-  readonly method = "aria" as const;
+export async function executeResolvedIntent(
+  resolved: ResolvedIntent,
+  page: import("playwright").Page
+): Promise<void> {
+  const { intent, selector, coordinates } = resolved;
 
-  async resolve(intent: Intent, page: Page): Promise<ResolvedIntent | null> {
-    const start = Date.now();
-
-    // Try to extract role and name from the goal
-    const roleMatch = intent.goal.match(/^(click|fill|select|check|uncheck|toggle)\s+(?:the\s+)?(.+?)(?:\s+(?:button|textbox|input|checkbox|combobox|link|switch|tab|radio))?$/i);
-    if (!roleMatch) return null;
-
-    const action = roleMatch[1].toLowerCase();
-    const label = roleMatch[2].trim();
-
-    // Try common aria roles based on action
-    const rolesToTry = this.getRoleCandidates(action);
-
-    for (const role of rolesToTry) {
-      try {
-        const locator = page.getByRole(role as Parameters<Page["getByRole"]>[0], { name: label });
-        const count = await locator.count();
-        if (count > 0) {
-          const visible = await locator.first().isVisible({ timeout: 2000 });
-          if (visible) {
-            return {
-              selector: `role=${role}[name="${label}"]`,
-              method: "aria",
-              durationMs: Date.now() - start,
-            };
-          }
-        }
-      } catch {
-        continue;
-      }
-    }
-
-    // Also try getByLabel and getByText as fallback
-    try {
-      const byLabel = page.getByLabel(label);
-      if (await byLabel.count() > 0 && await byLabel.first().isVisible({ timeout: 2000 })) {
-        return {
-          selector: `label="${label}"`,
-          method: "aria",
-          durationMs: Date.now() - start,
-        };
-      }
-    } catch {}
-
-    try {
-      const byText = page.getByText(label, { exact: true });
-      if (await byText.count() > 0 && await byText.first().isVisible({ timeout: 2000 })) {
-        return {
-          selector: `text="${label}"`,
-          method: "aria",
-          durationMs: Date.now() - start,
-        };
-      }
-    } catch {}
-
-    return null;
-  }
-
-  private getRoleCandidates(action: string): string[] {
-    switch (action) {
-      case "click": return ["button", "link", "tab", "menuitem", "switch"];
-      case "fill": return ["textbox", "searchbox", "spinbutton"];
-      case "select": return ["combobox", "listbox", "radio"];
-      case "check":
-      case "uncheck":
-      case "toggle": return ["checkbox", "switch"];
-      default: return ["button", "link", "textbox"];
-    }
+  if (selector) {
+    await executeWithSelector(intent, selector, page);
+  } else if (coordinates) {
+    await executeWithCoordinates(intent, coordinates, page);
+  } else {
+    throw new Error(
+      `Cannot execute intent: no selector or coordinates for "${intent.target}"`
+    );
   }
 }
 
-/**
- * Vision strategy: takes a screenshot and uses an LLM vision model
- * to locate the target element.
- */
-export class VisionStrategy implements ResolutionStrategy {
-  readonly method = "vision" as const;
-
-  constructor(private readonly llm: LLMProvider) {}
-
-  async resolve(intent: Intent, page: Page): Promise<ResolvedIntent | null> {
-    const start = Date.now();
-    try {
-      const screenshot = await page.screenshot({ type: "png" });
-      const base64 = screenshot.toString("base64");
-      const selector = await this.llm.findElementFromScreenshot(intent, base64);
-      if (!selector) return null;
-
-      // Verify the selector works
-      const el = await page.locator(selector).first();
-      const visible = await el.isVisible({ timeout: 3000 });
-      if (!visible) return null;
-
-      return {
-        selector,
-        method: "vision",
-        durationMs: Date.now() - start,
-      };
-    } catch {
-      return null;
-    }
+async function executeWithSelector(
+  intent: Intent,
+  selector: string,
+  page: import("playwright").Page
+): Promise<void> {
+  switch (intent.action) {
+    case "click":
+      await page.click(selector);
+      break;
+    case "fill":
+      if (intent.value !== undefined) {
+        await page.fill(selector, intent.value);
+      }
+      break;
+    case "select":
+      if (intent.value !== undefined) {
+        await page.selectOption(selector, intent.value);
+      }
+      break;
+    case "hover":
+      await page.hover(selector);
+      break;
+    case "check":
+      await page.check(selector);
+      break;
+    case "uncheck":
+      await page.uncheck(selector);
+      break;
+    default:
+      await page.click(selector);
   }
 }
 
-/**
- * LLM strategy: gets the accessibility tree and asks an LLM to find the element.
- */
-export class LLMStrategy implements ResolutionStrategy {
-  readonly method = "llm" as const;
+async function executeWithCoordinates(
+  intent: Intent,
+  coordinates: { x: number; y: number },
+  page: import("playwright").Page
+): Promise<void> {
+  const { x, y } = coordinates;
 
-  constructor(private readonly llm: LLMProvider) {}
-
-  async resolve(intent: Intent, page: Page): Promise<ResolvedIntent | null> {
-    const start = Date.now();
-    try {
-      const snapshot = await page.accessibility.snapshot();
-      if (!snapshot) return null;
-
-      const tree = JSON.stringify(snapshot, null, 2);
-      const selector = await this.llm.findElementFromAccessibilityTree(intent, tree);
-      if (!selector) return null;
-
-      // Verify the selector works
-      const el = await page.locator(selector).first();
-      const visible = await el.isVisible({ timeout: 3000 });
-      if (!visible) return null;
-
-      return {
-        selector,
-        method: "llm",
-        durationMs: Date.now() - start,
-      };
-    } catch {
-      return null;
-    }
+  switch (intent.action) {
+    case "click":
+      await page.mouse.click(x, y);
+      break;
+    case "fill":
+      // Click to focus, then type
+      await page.mouse.click(x, y);
+      if (intent.value !== undefined) {
+        // Select all existing text and replace
+        await page.keyboard.press("Control+A");
+        await page.keyboard.type(intent.value);
+      }
+      break;
+    case "hover":
+      await page.mouse.move(x, y);
+      break;
+    default:
+      await page.mouse.click(x, y);
   }
 }

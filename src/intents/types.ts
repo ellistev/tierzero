@@ -1,95 +1,138 @@
-import type { Page } from "playwright";
-
 /**
- * An Intent describes WHAT to achieve on a page, not HOW.
- * The IntentEngine resolves the "how" adaptively.
+ * Core types for the TierZero Intent Engine.
  */
+
+// Re-export Page type for convenience (Playwright is a peer dep)
+export type { Page } from "playwright";
+
+// ---------------------------------------------------------------------------
+// Intent
+// ---------------------------------------------------------------------------
+
 export interface Intent {
-  /** Unique name for this intent (e.g. "click-search-button") */
-  name: string;
-  /** Human-readable goal (e.g. "Click the Search button") */
-  goal: string;
-  /** Page URL pattern this intent applies to */
-  page: string;
-  /** Optional value to fill/select (for fill/select intents) */
+  /** Action to perform: click, fill, navigate, select, hover, scroll, etc. */
+  action: string;
+  /** Human-readable description of the target element */
+  target: string;
+  /** Value for fill/select actions */
   value?: string;
-  /** Optional additional context for LLM-based resolution */
-  context?: Record<string, unknown>;
+  /** CSS or ARIA selector if already known */
+  selector?: string;
+  /** Coordinate-based target if known */
+  coordinates?: { x: number; y: number; width?: number; height?: number };
+  /** Additional metadata */
+  meta?: Record<string, unknown>;
 }
 
-/**
- * Result of resolving an intent to a concrete selector.
- */
+// ---------------------------------------------------------------------------
+// Resolved Intent (output of the strategy chain)
+// ---------------------------------------------------------------------------
+
 export interface ResolvedIntent {
-  selector: string;
-  method: ResolutionMethod;
-  durationMs: number;
+  intent: Intent;
+  selector?: string;
+  coordinates?: { x: number; y: number };
+  confidence: number;
+  strategy: string;
 }
 
-export type ResolutionMethod = "cached" | "aria" | "vision" | "llm";
+// ---------------------------------------------------------------------------
+// LLM Provider Interface
+// ---------------------------------------------------------------------------
 
-/**
- * A resolution strategy that can find an element on a page.
- * Strategies are tried in order by the IntentEngine.
- */
-export interface ResolutionStrategy {
-  readonly method: ResolutionMethod;
-  resolve(intent: Intent, page: Page): Promise<ResolvedIntent | null>;
-}
-
-/**
- * A recovery strategy for when the page is in an unexpected state.
- */
-export interface RecoveryStrategy {
-  readonly name: string;
-  canRecover(intent: Intent, page: Page, error: Error): Promise<boolean>;
-  recover(intent: Intent, page: Page, error: Error): Promise<{ recovered: boolean; detail: string }>;
-}
-
-/**
- * LLM provider interface - abstracted for pluggability and testing.
- */
 export interface LLMProvider {
   /**
-   * Given an accessibility tree (text), find the best selector for the intent.
+   * Parse an accessibility tree and return the best CSS/aria selector
+   * for the element matching the intent.
    */
   findElementFromAccessibilityTree(
     intent: Intent,
-    accessibilityTree: string
+    tree: string
   ): Promise<string | null>;
 
   /**
-   * Given a screenshot (base64), find coordinates or selector for the intent.
+   * Analyze a screenshot and return a selector or coordinates
+   * for the element matching the intent.
    */
   findElementFromScreenshot(
     intent: Intent,
-    screenshotBase64: string
-  ): Promise<string | null>;
+    base64: string
+  ): Promise<{ selector?: string; coordinates?: { x: number; y: number } } | null>;
 
   /**
-   * Analyze unexpected page state and suggest recovery actions.
+   * Diagnose the current page state after an error and suggest a recovery action.
    */
   analyzePageForRecovery(
     intent: Intent,
     pageContent: string,
     error: string
-  ): Promise<{ action: "navigate" | "dismiss" | "wait" | "escalate"; detail: string } | null>;
+  ): Promise<{ action: string; detail: string } | null>;
+
+  /**
+   * Parse a natural language goal into a structured Intent.
+   */
+  parseGoalToIntent?(goal: string): Promise<Intent>;
+
+  /**
+   * Decompose a complex goal into a sequence of atomic intents.
+   */
+  decomposeGoal?(goal: string): Promise<Intent[]>;
+
+  /**
+   * Identify element coordinates from a screenshot.
+   */
+  findCoordinatesFromScreenshot?(
+    intent: Intent,
+    base64: string,
+    viewport: { width: number; height: number }
+  ): Promise<{ x: number; y: number; width: number; height: number } | null>;
+
+  /**
+   * Verify whether a visual condition is met on a screenshot.
+   */
+  verifyVisualCondition?(
+    description: string,
+    base64: string
+  ): Promise<boolean>;
 }
 
-/**
- * Cached selector entry from the read model.
- */
-export interface CachedSelector {
-  selector: string;
-  method: string;
-  successCount: number;
-  lastUsed: string;
-  avgDurationMs: number;
+// ---------------------------------------------------------------------------
+// Strategy Interface
+// ---------------------------------------------------------------------------
+
+export interface StrategyContext {
+  page: import("playwright").Page;
+  llm?: LLMProvider;
+  cache?: SelectorCache;
 }
 
-/**
- * Interface for querying the selector cache read model.
- */
-export interface SelectorCacheQuery {
-  get(page: string, intentName: string): Promise<CachedSelector | null>;
+export interface Strategy {
+  readonly name: string;
+  resolve(
+    intent: Intent,
+    context: StrategyContext
+  ): Promise<ResolvedIntent | null>;
 }
+
+// ---------------------------------------------------------------------------
+// Selector Cache
+// ---------------------------------------------------------------------------
+
+export interface SelectorCache {
+  get(intentKey: string): string | undefined;
+  set(intentKey: string, selector: string): void;
+  invalidate(intentKey: string): void;
+}
+
+// ---------------------------------------------------------------------------
+// Engine Events (CQRS)
+// ---------------------------------------------------------------------------
+
+export interface IntentEvent {
+  type: string;
+  intentId: string;
+  timestamp: string;
+  data: Record<string, unknown>;
+}
+
+export type IntentEventHandler = (event: IntentEvent) => void;
