@@ -62,8 +62,11 @@ export class GitOps {
     this.exec(`git push -u ${this.remote} ${branch}`);
   }
 
-  /** Checkout main and pull latest */
+  /** Checkout main and pull latest, nuking any dirty state */
   resetToMain(): void {
+    // Force-clean any uncommitted changes or untracked files the agent left behind
+    this.exec("git reset --hard");
+    this.exec("git clean -fd");
     this.exec("git checkout main");
     this.exec(`git pull ${this.remote} main`);
   }
