@@ -45,24 +45,41 @@ export class PRCreator {
 
   private async request<T>(path: string, options: RequestInit = {}): Promise<T> {
     const url = `${this.apiUrl}${path}`;
-    const res = await fetch(url, {
-      ...options,
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "Content-Type": "application/json",
-        ...options.headers,
-      },
-    });
+    
+    // Add simple retry logic for fetch failures
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const res = await fetch(url, {
+          ...options,
+          headers: {
+            Authorization: `Bearer ${this.token}`,
+            Accept: "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Content-Type": "application/json",
+            ...options.headers,
+          },
+        });
 
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(`GitHub ${res.status} ${res.statusText}: ${body}`);
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          throw new Error(`GitHub ${res.status} ${res.statusText}: ${body}`);
+        }
+
+        if (res.status === 204) return undefined as unknown as T;
+        return (await res.json()) as T;
+      } catch (err) {
+        lastError = err;
+        // If it's an HTTP error from GitHub, throw immediately (don't retry)
+        if (err instanceof Error && err.message.startsWith("GitHub ")) {
+          throw err;
+        }
+        // Otherwise it's likely a network/fetch error, wait and retry
+        console.warn(`[PRCreator] Fetch failed on attempt ${attempt}/3: ${err instanceof Error ? err.message : String(err)}. Retrying in 2s...`);
+        if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 2000));
+      }
     }
-
-    if (res.status === 204) return undefined as unknown as T;
-    return res.json() as Promise<T>;
+    throw lastError;
   }
 
   /** Create a pull request */
