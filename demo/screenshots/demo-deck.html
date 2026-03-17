@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>TierZero - Adaptive Browser Automation Demo</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  @page { size: 11in 8.5in landscape; margin: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e0e0e0; }
+  
+  .slide {
+    width: 11in; height: 8.5in;
+    padding: 0.6in 0.8in;
+    page-break-after: always;
+    page-break-inside: avoid;
+    display: flex; flex-direction: column;
+    position: relative;
+    background: #0f1117;
+  }
+  .slide:last-child { page-break-after: avoid; }
+  
+  h1 { font-size: 38px; color: #4fc3f7; margin-bottom: 18px; }
+  h2 { font-size: 30px; color: #81d4fa; margin-bottom: 14px; }
+  h3 { font-size: 22px; color: #b3e5fc; margin-bottom: 10px; }
+  p { font-size: 17px; line-height: 1.6; color: #bbb; margin: 6px 0; }
+  ul { font-size: 16px; line-height: 1.7; color: #bbb; padding-left: 24px; }
+  li { margin: 3px 0; }
+  code { background: #1e1e2e; padding: 2px 8px; border-radius: 4px; font-size: 14px; color: #e06c75; }
+  
+  .g { color: #4caf50; font-weight: bold; }
+  .r { color: #f44336; font-weight: bold; }
+  .y { color: #ff9800; font-weight: bold; }
+  .b { color: #4fc3f7; font-weight: bold; }
+  
+  .footer { position: absolute; bottom: 20px; right: 40px; font-size: 12px; color: #444; }
+  .page-num { position: absolute; bottom: 20px; left: 40px; font-size: 12px; color: #444; }
+  
+  .center { text-align: center; justify-content: center; align-items: center; }
+  
+  .side-by-side { display: flex; gap: 24px; margin-top: 16px; }
+  .side-by-side > div { flex: 1; }
+  .side-by-side img { width: 100%; border: 2px solid #2a2a3a; border-radius: 6px; }
+  .side-by-side .label { text-align: center; font-size: 14px; color: #888; margin-bottom: 6px; }
+  
+  .img-container { margin-top: 12px; }
+  .img-container img { max-width: 100%; max-height: 380px; border: 2px solid #2a2a3a; border-radius: 6px; display: block; margin: 0 auto; }
+  
+  .pipeline { display: flex; align-items: center; gap: 8px; margin: 16px 0; flex-wrap: wrap; }
+  .pipeline .step { background: #1a237e; padding: 10px 16px; border-radius: 8px; text-align: center; font-size: 15px; }
+  .pipeline .step small { display: block; font-size: 11px; color: #999; margin-top: 4px; }
+  .pipeline .arr { font-size: 22px; color: #4fc3f7; }
+  
+  .cols { display: flex; gap: 30px; margin-top: 12px; }
+  .col { flex: 1; }
+  .col h3 { font-size: 18px; }
+  
+  .callout { background: #1a2332; border-left: 4px solid #4fc3f7; padding: 12px 16px; margin: 12px 0; border-radius: 0 6px 6px 0; }
+  .callout p { margin: 0; font-size: 16px; }
+</style>
+</head>
+<body>
+
+<!-- SLIDE 1: Title -->
+<div class="slide center">
+  <h1 style="font-size: 56px; margin-bottom: 8px;">TierZero</h1>
+  <p style="font-size: 26px; color: #81d4fa; margin-bottom: 30px;">Self-Healing Adaptive Browser Automation</p>
+  <p style="font-size: 20px; color: #888;">Record a workflow once. Replay it anywhere.</p>
+  <p style="font-size: 20px; color: #888;">The UI changes. The workflow doesn't break.</p>
+  <p style="font-size: 16px; color: #555; margin-top: 40px;">Steve Elliott - March 2026</p>
+  <div class="footer">TierZero</div>
+  <div class="page-num">1 / 12</div>
+</div>
+
+<!-- SLIDE 2: The Problem -->
+<div class="slide">
+  <h1>The Problem: Brittle Automation</h1>
+  <p>Every enterprise has repetitive browser workflows. ServiceNow tickets, Jira tasks, insurance claims, HR onboarding. Today they're either done manually or automated with <span class="r">fragile scripts</span>.</p>
+  
+  <div class="cols" style="margin-top: 16px;">
+    <div class="col">
+      <h3><span class="r">What breaks scripts:</span></h3>
+      <ul>
+        <li>UI redesign changes CSS selectors</li>
+        <li>Button text changes ("Save" to "Apply")</li>
+        <li>New confirmation modal appears</li>
+        <li>Table columns get reordered</li>
+        <li>Form fields move to different page</li>
+      </ul>
+    </div>
+    <div class="col">
+      <h3><span class="y">The cost:</span></h3>
+      <ul>
+        <li><strong>$50-400B/year</strong> per vertical in manual services</li>
+        <li>RPA implementations fail 30-50% of the time</li>
+        <li>Every UI update = weeks of script maintenance</li>
+        <li>Companies hire humans instead of fixing scripts</li>
+      </ul>
+    </div>
+  </div>
+  
+  <div class="callout" style="margin-top: 16px;">
+    <p><span class="b">The gap:</span> Scripted automation = consulting gig (rebuild every time). Self-healing automation = scalable product.</p>
+  </div>
+  <div class="footer">TierZero</div>
+  <div class="page-num">2 / 12</div>
+</div>
+
+<!-- SLIDE 3: The Solution -->
+<div class="slide">
+  <h1>The Solution: Intent-Based Automation</h1>
+  <p>Instead of telling the computer <strong>HOW</strong> to interact (selectors), tell it <strong>WHAT</strong> to achieve (goals). The system figures out the HOW at runtime.</p>
+  
+  <div class="cols" style="margin-top: 20px;">
+    <div class="col" style="background: #1a1a2e; padding: 20px; border-radius: 8px; border: 1px solid #f44336;">
+      <h3><span class="r">Traditional (Scripted)</span></h3>
+      <p><code>page.click('#btn-resolve-main')</code></p>
+      <p><code>page.fill('#comment-textarea', text)</code></p>
+      <p><code>page.click('button.submit-btn')</code></p>
+      <p style="margin-top: 12px; color: #f44336;">Selector changes = script dies</p>
+    </div>
+    <div class="col" style="background: #1a2e1a; padding: 20px; border-radius: 8px; border: 1px solid #4caf50;">
+      <h3><span class="g">TierZero (Intent-Based)</span></h3>
+      <p><code>goal: "Click the Resolve button"</code></p>
+      <p><code>goal: "Fill the comment field"</code></p>
+      <p><code>goal: "Submit the form"</code></p>
+      <p style="margin-top: 12px; color: #4caf50;">UI changes = system adapts</p>
+    </div>
+  </div>
+  
+  <div class="callout" style="margin-top: 16px;">
+    <p><span class="g">Key insight:</span> The workflow describes the GOAL ("click Resolve"), not the SELECTOR ("#btn-resolve"). When the UI changes, the IntentEngine finds the element by understanding the page, not memorizing paths.</p>
+  </div>
+  <div class="footer">TierZero</div>
+  <div class="page-num">3 / 12</div>
+</div>
+
+<!-- SLIDE 4: The Pipeline -->
+<div class="slide">
+  <h1>The Full Pipeline</h1>
+  <p>From human demonstration to adaptive automated skill in 5 steps:</p>
+  
+  <div class="pipeline" style="margin-top: 20px;">
+    <div class="step">🎥 Record<small>Watch human do task</small></div>
+    <div class="arr">→</div>
+    <div class="step">🏷️ Annotate<small>LLM adds meaning</small></div>
+    <div class="arr">→</div>
+    <div class="step">⚙️ Generate<small>Create intent workflow</small></div>
+    <div class="arr">→</div>
+    <div class="step">📦 Package<small>Hot-loadable skill</small></div>
+    <div class="arr">→</div>
+    <div class="step">▶️ Replay<small>Adaptive execution</small></div>
+  </div>
+  
+  <ul style="margin-top: 20px;">
+    <li><strong>Record:</strong> CDP captures every click, keystroke, and navigation with page state snapshots</li>
+    <li><strong>Annotate:</strong> LLM generates semantic descriptions ("Clicked the Search button in the nav bar") and detects variable vs constant values</li>
+    <li><strong>Generate:</strong> Converts annotated recording into intent-based workflow steps - goals, not selectors</li>
+    <li><strong>Package:</strong> Outputs a hot-loadable TierZero skill with skill.json manifest and executable entry point</li>
+    <li><strong>Replay:</strong> IntentEngine executes each intent adaptively with a 5-strategy fallback chain + recovery</li>
+  </ul>
+  
+  <div class="callout" style="margin-top: 12px;">
+    <p><span class="b">No coding required.</span> A business analyst demonstrates the task. TierZero generates the automation. If the UI changes, the automation adapts.</p>
+  </div>
+  <div class="footer">TierZero</div>
+  <div class="page-num">4 / 12</div>
+</div>
+
+<!-- SLIDE 5: Demo App v1 Login -->
+<div class="slide">
+  <h2>Demo: Layout v1 - Login Page</h2>
+  <p>A simulated ticket management system (like ServiceNow). This is Layout v1 - the "original" design. We'll record a workflow here.</p>
+  <div class="img-container"><img src="01-v1-login.png"></div>
+  <p style="margin-top: 8px;"><span class="b">Note:</span> Standard login form. "Sign In" button. Normal label casing. Light blue button.</p>
+  <div class="footer">TierZero</div>
+  <div class="page-num">5 / 12</div>
+</div>
+
+<!-- SLIDE 6: Demo App v1 Dashboard -->
+<div class="slide">
+  <h2>Layout v1 - Ticket Dashboard</h2>
+  <p>10 tickets with ID, Title, Status, Priority, Assignee columns. This is where the workflow recording begins - we'll search for and open a ticket.</p>
+  <div class="img-container"><img src="02-v1-dashboard.png"></div>
+  <p style="margin-top: 8px;"><span class="b">Column order:</span> ID → Title → Status → Priority → Assignee. Buttons in nav bar, right-aligned. Status/priority badges inline.</p>
+  <div class="footer">TierZero</div>
+  <div class="page-num">6 / 12</div>
+</div>
+
+<!-- SLIDE 7: Demo App v1 Ticket Detail -->
+<div class="slide">
+  <h2>Layout v1 - Ticket Detail</h2>
+  <p>The recorded workflow: open ticket TKT-007, add a comment, assign to someone, click Resolve. All buttons are text-based and right-aligned.</p>
+  <div class="img-container"><img src="04-v1-ticket-detail.png"></div>
+  <p style="margin-top: 8px;"><span class="g">"Resolve"</span> button (green, bottom-right). <span class="b">"Save Changes"</span> (blue, right). <span class="b">"Add Comment"</span> (blue, right). Standard text labels.</p>
+  <div class="footer">TierZero</div>
+  <div class="page-num">7 / 12</div>
+</div>
+
+<!-- SLIDE 8: Now the redesign -->
+<div class="slide">
+  <h1>Now: The UI Gets Redesigned</h1>
+  <p>The product team ships a redesign. <span class="r">Traditional automation breaks immediately.</span> Let's see what changed:</p>
+  
+  <ul style="margin-top: 16px; font-size: 17px;">
+    <li><span class="y">Button text changed:</span> "Resolve" → "✓ Done", "Add Comment" → "💬 Comment", "Save Changes" → "💾 Save"</li>
+    <li><span class="y">Button position changed:</span> Moved from bottom-right to top and bottom-left</li>
+    <li><span class="y">CSS classes changed:</span> <code>.btn</code> → <code>.action-btn</code>, <code>.card</code> → <code>.panel</code></li>
+    <li><span class="y">Table columns reordered:</span> Priority moved to first column, Status to last</li>
+    <li><span class="y">Labels uppercased:</span> "Username" → "USERNAME", "Add Comment" → "ADD COMMENT"</li>
+    <li><span class="y">Color scheme changed:</span> Blue → Purple/Indigo</li>
+    <li><span class="y">New confirmation modal:</span> v2 shows "Are you sure?" when resolving</li>
+  </ul>
+  
+  <div class="callout" style="margin-top: 16px;">
+    <p><span class="r">With traditional scripting:</span> Every selector fails. Every text match fails. Script is dead. Engineer spends days rewriting.</p>
+    <p style="margin-top: 8px;"><span class="g">With TierZero:</span> Workflow says "Click Resolve button." IntentEngine finds "✓ Done" via aria-label. Zero changes needed.</p>
+  </div>
+  <div class="footer">TierZero</div>
+  <div class="page-num">8 / 12</div>
+</div>
+
+<!-- SLIDE 9: v2 Dashboard -->
+<div class="slide">
+  <h2>Layout v2 - Redesigned Dashboard</h2>
+  <p>Same data. Completely different structure. Priority column is FIRST. Headers are UPPERCASE. Status pills on the RIGHT. Nav moved below logo.</p>
+  <div class="img-container"><img src="06-v2-dashboard.png"></div>
+  <p style="margin-top: 8px;"><span class="y">Column order changed:</span> Priority → ID → Title → Assignee → Status. <span class="y">Every CSS selector is different.</span> A scripted automation would fail on every single element.</p>
+  <div class="footer">TierZero</div>
+  <div class="page-num">9 / 12</div>
+</div>
+
+<!-- SLIDE 10: Side by Side -->
+<div class="slide">
+  <h2>Side-by-Side: The Adaptive Challenge</h2>
+  <p>Workflow was recorded on v1 (left). Replayed on v2 (right). <span class="g">Zero modifications to the workflow.</span></p>
+  <div class="side-by-side">
+    <div>
+      <div class="label">v1 - Workflow Recorded Here</div>
+      <img src="04-v1-ticket-detail.png">
+    </div>
+    <div>
+      <div class="label" style="color: #4caf50;">v2 - Replayed Successfully Here ✓</div>
+      <img src="07-v2-ticket-detail.png">
+    </div>
+  </div>
+  <p style="margin-top: 10px;"><span class="g">Every difference handled:</span> "Resolve" → "✓ Done" (found via aria-label). Button moved from bottom-right to top (found via role). New modal dismissed automatically. Comment field found despite label change.</p>
+  <div class="footer">TierZero</div>
+  <div class="page-num">10 / 12</div>
+</div>
+
+<!-- SLIDE 11: How It Works Technically -->
+<div class="slide">
+  <h1>How the IntentEngine Adapts</h1>
+  <p>Five resolution strategies tried in order. If one fails, the next kicks in:</p>
+  
+  <ul style="margin-top: 12px;">
+    <li><strong>1. Cached (~50ms):</strong> Try the last-known-good selector. If the UI hasn't changed, this is instant.</li>
+    <li><strong>2. Aria (~200ms):</strong> Find by accessibility role + label. "Resolve" button found even when visible text is "✓ Done" because aria-label is preserved.</li>
+    <li><strong>3. LLM - Accessibility Tree (~500ms):</strong> Feed the page's accessibility tree to GPT-4o-mini. It understands context: "this looks like a submit/resolve action button."</li>
+    <li><strong>4. LLM - Vision (~1s):</strong> Screenshot the page, ask GPT-4o vision to locate the element. Works even with completely custom UIs.</li>
+    <li><strong>5. Coordinates (~1.5s):</strong> Ask the LLM for pixel coordinates and click directly. Last resort fallback.</li>
+  </ul>
+  
+  <p style="margin-top: 12px;"><strong>Recovery strategies:</strong></p>
+  <ul>
+    <li><strong>Dialog Dismissal:</strong> Detects and closes unexpected modals/alerts automatically</li>
+    <li><strong>LLM Recovery:</strong> Analyzes page state, suggests navigation or wait actions</li>
+    <li><strong>Page State Assertions:</strong> Verifies expected state between steps, retries if needed</li>
+  </ul>
+  <div class="footer">TierZero</div>
+  <div class="page-num">11 / 12</div>
+</div>
+
+<!-- SLIDE 12: The Moat -->
+<div class="slide center">
+  <h1 style="font-size: 42px;">The Moat</h1>
+  <p style="font-size: 22px; margin-top: 20px;">Scripted automation = <span class="r">consulting gig</span> (rebuild for every client, every update)</p>
+  <p style="font-size: 22px;">Self-healing adaptive automation = <span class="g">scalable product</span></p>
+  
+  <div style="margin-top: 30px; display: flex; gap: 40px; justify-content: center;">
+    <div style="text-align: center;">
+      <div style="font-size: 64px; font-weight: bold; color: #4fc3f7;">9,605</div>
+      <p>lines of code</p>
+    </div>
+    <div style="text-align: center;">
+      <div style="font-size: 64px; font-weight: bold; color: #4caf50;">243</div>
+      <p>tests passing</p>
+    </div>
+    <div style="text-align: center;">
+      <div style="font-size: 64px; font-weight: bold; color: #ff9800;">18</div>
+      <p>new modules</p>
+    </div>
+  </div>
+  
+  <p style="margin-top: 30px; font-size: 18px; color: #666;">Autopilot, not copilot. Sell outcomes, not tools.</p>
+  <p style="font-size: 18px; color: #666;">$50-400B TAM per vertical in services automation.</p>
+  <div class="footer">TierZero - Steve Elliott - March 2026</div>
+  <div class="page-num">12 / 12</div>
+</div>
+
+</body>
+</html>
