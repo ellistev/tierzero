@@ -198,18 +198,26 @@ export class Implementer {
       const systemPrompt = buildSystemPrompt();
       const userPrompt = buildUserPrompt(ticket, fileContext);
 
+      console.log(`[implementer] Sending ${files.length} files (${fileContext.length} chars) to ${this.model.modelName}...`);
+      
       const response = await this.model.chat([
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ]);
+
+      console.log(`[implementer] Got response: ${response.length} chars`);
+      console.log(`[implementer] Response preview: ${response.slice(0, 500)}`);
 
       // 3. Parse the edit plan
       const plan = parseEditPlan(response);
       plan.filesRead = files.map((f) => f.relativePath);
       result.summary = plan.summary;
 
+      console.log(`[implementer] Parsed ${plan.edits.length} edits, summary: ${plan.summary.slice(0, 200)}`);
+
       if (!plan.edits.length) {
         result.summary = plan.summary || "LLM produced no file edits — the change may require manual implementation.";
+        console.log(`[implementer] WARNING: No edits parsed from response. Full response:\n${response.slice(0, 2000)}`);
         result.durationMs = Date.now() - start;
         return result;
       }
@@ -297,6 +305,7 @@ export class Implementer {
       return result;
     } catch (err) {
       result.error = err instanceof Error ? err.message : String(err);
+      console.error(`[implementer] EXCEPTION: ${result.error}`);
       result.durationMs = Date.now() - start;
       return result;
     }
