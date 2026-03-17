@@ -7,10 +7,14 @@
  */
 
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { GitOps } from "./git-ops";
 import { PRCreator, type PRCreatorConfig } from "./pr-creator";
 import type { GitHubConnector } from "../connectors/github";
 import type { Ticket } from "../connectors/types";
+import { IssuePipelineAggregate } from "../domain/issue-pipeline/IssuePipelineAggregate";
+import { StartPipeline, CompleteAgentWork, RecordTestRun, RecordTestFix, CreatePR, CompletePipeline, FailPipeline } from "../domain/issue-pipeline/commands";
+import type { IEventStore, ESEventData } from "../infra/interfaces";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -35,6 +39,8 @@ export interface PipelineConfig {
   maxTestRetries?: number;
   /** Logger */
   logger?: PipelineLogger;
+  /** Event store for pipeline audit trail */
+  eventStore?: IEventStore;
 }
 
 export interface PipelineLogger {
@@ -201,12 +207,29 @@ export class IssuePipeline {
   private readonly git: GitOps;
   private readonly pr: PRCreator;
   private readonly logger: PipelineLogger;
+  private readonly eventStore: IEventStore | null;
 
   constructor(config: PipelineConfig) {
     this.config = config;
     this.git = new GitOps({ cwd: config.workDir });
     this.pr = new PRCreator(config.prConfig);
     this.logger = config.logger ?? defaultLogger;
+    this.eventStore = config.eventStore ?? null;
+  }
+
+  private async emitEvents(streamId: string, aggregate: IssuePipelineAggregate, events: unknown[]): Promise<void> {
+    for (const event of events) {
+      aggregate.hydrate(event);
+    }
+    if (this.eventStore) {
+      const esEvents: ESEventData[] = events.map((e) => ({
+        eventId: randomUUID(),
+        eventType: (e as { constructor: { type: string } }).constructor.type,
+        data: e,
+        metadata: { timestamp: Date.now() },
+      }));
+      await this.eventStore.appendToStream(streamId, esEvents, this.eventStore.EXPECT_ANY);
+    }
   }
 
   /**
@@ -215,6 +238,9 @@ export class IssuePipeline {
   async run(ticket: Ticket): Promise<PipelineResult> {
     const issueNumber = parseInt(ticket.id);
     const branch = GitOps.branchName(issueNumber, ticket.title);
+    const pipelineId = randomUUID();
+    const streamId = `IssuePipeline-${pipelineId}`;
+    const aggregate = new IssuePipelineAggregate();
     const result: PipelineResult = {
       issueNumber,
       branch,
@@ -226,8 +252,13 @@ export class IssuePipeline {
     };
 
     try {
-      // 1. Update issue status
+      // 1. Start pipeline + update issue status
       this.logger.log(`Starting work on #${issueNumber}: ${ticket.title}`);
+      const startEvents = aggregate.execute(
+        new StartPipeline(pipelineId, issueNumber, ticket.title, branch, new Date().toISOString())
+      );
+      await this.emitEvents(streamId, aggregate, startEvents);
+
       if (this.config.inProgressLabel) {
         await this.config.github.addLabels(ticket.id, [this.config.inProgressLabel]);
       }
@@ -256,19 +287,40 @@ export class IssuePipeline {
       result.summary = agentResult.summary;
       result.filesChanged = agentResult.filesChanged;
 
+      const agentEvents = aggregate.execute(
+        new CompleteAgentWork(pipelineId, agentResult.summary, agentResult.filesChanged, new Date().toISOString())
+      );
+      await this.emitEvents(streamId, aggregate, agentEvents);
+
       // 5. Run tests
       const testCmd = this.config.testCommand ?? "npm test";
       const maxRetries = this.config.maxTestRetries ?? 2;
       let testResult = await this.runTests(testCmd);
       let retries = 0;
 
+      const testEvents = aggregate.execute(
+        new RecordTestRun(pipelineId, testResult.passed, testResult.total, testResult.passing, testResult.failing, 1, new Date().toISOString())
+      );
+      await this.emitEvents(streamId, aggregate, testEvents);
+
       while (!testResult.passed && retries < maxRetries) {
         this.logger.log(`Tests failed (${testResult.failing} failures). Retry ${retries + 1}/${maxRetries}...`);
         const fixResult = await this.config.codeAgent.fixTests(testResult.output, this.config.workDir);
         result.summary += `\n\nFix attempt ${retries + 1}: ${fixResult.summary}`;
         result.filesChanged = [...new Set([...result.filesChanged, ...fixResult.filesChanged])];
+
+        const fixEvents = aggregate.execute(
+          new RecordTestFix(pipelineId, retries + 1, fixResult.summary, fixResult.filesChanged, new Date().toISOString())
+        );
+        await this.emitEvents(streamId, aggregate, fixEvents);
+
         testResult = await this.runTests(testCmd);
         retries++;
+
+        const retryTestEvents = aggregate.execute(
+          new RecordTestRun(pipelineId, testResult.passed, testResult.total, testResult.passing, testResult.failing, retries + 1, new Date().toISOString())
+        );
+        await this.emitEvents(streamId, aggregate, retryTestEvents);
       }
 
       result.testsRun = testResult.total;
@@ -278,6 +330,12 @@ export class IssuePipeline {
       if (!this.git.hasChanges() && result.filesChanged.length === 0) {
         result.status = "failed";
         result.error = "No code changes were made";
+
+        const failEvents = aggregate.execute(
+          new FailPipeline(pipelineId, result.error, new Date().toISOString())
+        );
+        await this.emitEvents(streamId, aggregate, failEvents);
+
         await this.config.github.addComment(ticket.id, "TierZero couldn't produce code changes for this issue.");
         this.git.resetToMain();
         return result;
@@ -312,6 +370,16 @@ export class IssuePipeline {
       result.prUrl = prResult.url;
       result.status = testResult.passed ? "success" : "partial";
 
+      const prEvents = aggregate.execute(
+        new CreatePR(pipelineId, prResult.number, prResult.url, !testResult.passed, new Date().toISOString())
+      );
+      await this.emitEvents(streamId, aggregate, prEvents);
+
+      const completeEvents = aggregate.execute(
+        new CompletePipeline(pipelineId, result.status as "success" | "partial", new Date().toISOString())
+      );
+      await this.emitEvents(streamId, aggregate, completeEvents);
+
       // 8. Update issue
       const statusEmoji = testResult.passed ? "✅" : "⚠️";
       await this.config.github.addComment(
@@ -329,6 +397,15 @@ export class IssuePipeline {
       result.status = "failed";
       result.error = err instanceof Error ? err.message : String(err);
       this.logger.error(`Pipeline failed for #${issueNumber}: ${result.error}`);
+
+      try {
+        const failEvents = aggregate.execute(
+          new FailPipeline(pipelineId, result.error, new Date().toISOString())
+        );
+        await this.emitEvents(streamId, aggregate, failEvents);
+      } catch {
+        // Best effort - aggregate may not be in a valid state to accept FailPipeline
+      }
 
       try {
         await this.config.github.addComment(
