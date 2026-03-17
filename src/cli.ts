@@ -5,6 +5,7 @@ import { KnowledgeRetriever } from "./rag/retriever";
 import { ServiceNowConnector } from "./connectors/servicenow";
 import { JiraConnector } from "./connectors/jira";
 import { GitLabConnector } from "./connectors/gitlab";
+import { FreshdeskConnector } from "./connectors/freshdesk";
 import { AgentGraph } from "./agent/agent";
 import { TicketPoller } from "./agent/poller";
 import { AzureDevOpsWikiImporter, AzureDevOpsWorkItemMiner } from "./ingest/azure-devops";
@@ -107,7 +108,7 @@ ${c.bold("Commands:")}
   ${c.cyan("watch")}                             Continuous polling loop for ServiceNow tickets
   ${c.cyan("watch-github")}                      Watch a GitHub repo and autonomously resolve issues
   ${c.cyan("import-wiki")}                       Import docs from Azure DevOps or Confluence
-  ${c.cyan("mine-tickets")}                      Mine resolved tickets from ServiceNow/Jira/GitLab
+  ${c.cyan("mine-tickets")}                      Mine resolved tickets from ServiceNow/Jira/GitLab/Freshdesk
   ${c.cyan("import-url")} <urls...>              Scrape one or more URLs into the knowledge base
 
 ${c.bold("Global options:")}
@@ -168,10 +169,11 @@ ${c.bold("import-wiki options:")}
     --output <dir>       Output root directory       ${c.dim("(default: knowledge)")}
 
 ${c.bold("mine-tickets options:")}
-  --connector <name>     "servicenow", "jira", or "gitlab"
+  --connector <name>     "servicenow", "jira", "gitlab", or "freshdesk"
   ServiceNow: --instance-url --username --password
   Jira:       --base-url --email --api-token --project-key
   GitLab:     --base-url --token --project-id
+  Freshdesk:  --domain --api-key
   --limit <n>            Max tickets to mine         ${c.dim("(default: 100)")}
   --min-comments <n>     Quality gate                ${c.dim("(default: 1)")}
   --since <ISO date>     Only tickets updated after this date
@@ -597,7 +599,7 @@ async function cmdImportWiki(args: ParsedArgs) {
 
 async function cmdMineTickets(args: ParsedArgs) {
   const connectorName = str(args.flags, "connector", "");
-  if (!connectorName) die('--connector required: "servicenow", "jira", or "gitlab"');
+  if (!connectorName) die('--connector required: "servicenow", "jira", "gitlab", or "freshdesk"');
 
   const outputDir    = str(args.flags, "output", "knowledge");
   const limit        = num(args.flags, "limit", 100);
@@ -634,8 +636,15 @@ async function cmdMineTickets(args: ParsedArgs) {
     if (!projectId) die("GitLab project ID required.");
     connector = new GitLabConnector({ baseUrl, token, projectId });
 
+  } else if (connectorName === "freshdesk") {
+    const domain = str(args.flags, "domain", process.env.FRESHDESK_DOMAIN ?? "");
+    const apiKey = str(args.flags, "api-key", process.env.FRESHDESK_API_KEY ?? "");
+    if (!domain) die("Freshdesk domain required. Pass --domain or set FRESHDESK_DOMAIN.");
+    if (!apiKey) die("Freshdesk API key required. Pass --api-key or set FRESHDESK_API_KEY.");
+    connector = new FreshdeskConnector({ domain, apiKey });
+
   } else {
-    die(`Unknown --connector "${connectorName}". Use "servicenow", "jira", or "gitlab".`);
+    die(`Unknown --connector "${connectorName}". Use "servicenow", "jira", "gitlab", or "freshdesk".`);
   }
 
   console.log(`\n${c.bold("Mining tickets")}  connector: ${c.cyan(connectorName)}  limit: ${c.dim(String(limit))}  min-comments: ${c.dim(String(minComments))}${since ? `  since: ${since.toISOString()}` : ""}`);
