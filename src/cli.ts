@@ -694,6 +694,10 @@ async function cmdWatchGitHub(args: ParsedArgs) {
   if (!token) die("--token or GITHUB_TOKEN env var required");
 
   // Parse coder config (automatically uses --coding-model, --coding-provider, etc)
+  // Force fake codebase so buildCoderConfig parses the coding model args without exploding
+  if (!args.flags["codebase"]) {
+    args.flags["codebase"] = workDir;
+  }
   let { codebases, codingModel } = buildCoderConfig(args.flags);
   
   if (!codingModel || codebases.length === 0) {
