@@ -693,60 +693,60 @@ async function cmdWatchGitHub(args: ParsedArgs) {
 
   if (!token) die("--token or GITHUB_TOKEN env var required");
 
-  // For now, use a stub code agent that shells out to Claude Code
-  // This will be replaced with a proper LLM code agent
+  // Parse coder config (automatically uses --coding-model, --coding-provider, etc)
+  let { codebases, codingModel } = buildCoderConfig(args.flags);
+  
+  if (!codingModel || codebases.length === 0) {
+    console.log(c.yellow("No --coding-model specified. Defaulting to OpenRouter (claude-3.7-sonnet-20250219)..."));
+    // Default to the native implementer with Sonnet 3.7
+    codingModel = createCodingModel({ provider: "openrouter" as any, model: "anthropic/claude-3.7-sonnet" });
+    codebases = [{
+      name: "tierzero",
+      path: workDir,
+      testCommand: testCmd,
+      branchPrefix: "tierzero/",
+    }];
+  }
+
+  // Native CodeAgent wrapper around Implementer
   const codeAgent: CodeAgent = {
     async solve(issue, wd) {
-      const { execSync } = await import("node:child_process");
-      const prompt = [
-        `Fix GitHub issue #${issue.number}: ${issue.title}`,
-        "",
-        issue.description,
-        "",
-        "Write the code changes and tests. Run the test command to verify.",
-      ].join("\n");
+      if (!codingModel) throw new Error("No coding model");
+      const { Implementer } = await import("./coder/implementer");
+      const implementer = new Implementer(codebases[0], codingModel);
+      
+      console.log(c.dim(`\n── Implementer (${codingModel.modelName}) (solve #${issue.number}) ──`));
+      
+      // Adapt IssueContext to Ticket interface for Implementer
+      const dummyTicket: any = {
+        id: String(issue.number),
+        externalId: String(issue.number),
+        title: issue.title,
+        description: issue.description + "\n\nComments:\n" + issue.comments.join("\n"),
+        type: "task",
+        status: "open",
+        priority: "medium",
+        reporter: { id: "1", name: "github" },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        source: "github",
+        tags: issue.labels,
+      };
 
-      console.log(c.dim(`\n── Claude Code (solve #${issue.number}) ──`));
-      try {
-        await spawnStreaming(
-          "claude",
-          ["--permission-mode", "bypassPermissions", "--print", prompt],
-          { cwd: wd, timeout: 300_000 },
-        );
-      } catch {
-        // Claude Code may exit non-zero but still produce changes
-      }
-      console.log(c.dim("── end Claude Code ──\n"));
-
-      // Check what files changed
-      const diff = execSync("git diff --name-only", { cwd: wd, encoding: "utf-8" }).trim();
-      const untracked = execSync("git ls-files --others --exclude-standard", { cwd: wd, encoding: "utf-8" }).trim();
-      const files = [...diff.split("\n"), ...untracked.split("\n")].filter(Boolean);
+      const result = await implementer.implement(dummyTicket);
+      
+      console.log(c.dim(`── end Implementer (${result.success ? "success" : "failed"}) ──\n`));
 
       return {
-        summary: `Claude Code processed issue #${issue.number}`,
-        filesChanged: files,
+        summary: result.summary + (result.error ? `\n\nError: ${result.error}` : ""),
+        filesChanged: [...result.filesChanged, ...result.filesDeleted],
       };
     },
 
     async fixTests(failures, wd) {
-      const { execSync } = await import("node:child_process");
-      const prompt = `Fix these test failures:\n\n${failures.slice(0, 2000)}`;
-
-      console.log(c.dim("\n── Claude Code (fix tests) ──"));
-      try {
-        await spawnStreaming(
-          "claude",
-          ["--permission-mode", "bypassPermissions", "--print", prompt],
-          { cwd: wd, timeout: 300_000 },
-        );
-      } catch { /* may exit non-zero */ }
-      console.log(c.dim("── end Claude Code ──\n"));
-
-      const diff = execSync("git diff --name-only", { cwd: wd, encoding: "utf-8" }).trim();
       return {
-        summary: "Claude Code attempted test fixes",
-        filesChanged: diff ? diff.split("\n") : [],
+        summary: "Native implementer does not yet support multi-round test fixing for GitHub issues. Review manually.",
+        filesChanged: [],
       };
     },
   };
