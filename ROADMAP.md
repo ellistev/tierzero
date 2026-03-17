@@ -3,12 +3,12 @@
 ## Vision
 TierZero builds itself. The system that resolves tickets IS the system being improved by tickets.
 
-## Phase 1: Dogfood (TierZero builds TierZero)
+## Phase 1: Dogfood (TierZero builds TierZero) ✅
 - [x] GitHub Issues connector (same interface as ServiceNow/Jira)
-- [ ] TierZero watches its own repo for open issues
-- [ ] Agent picks up issue, writes code, runs tests, submits PR
-- [ ] Human reviews and merges
-- [ ] Every merged PR is a demo artifact
+- [x] TierZero watches its own repo for open issues
+- [x] Agent picks up issue, writes code, runs tests, submits PR
+- [x] Human reviews and merges
+- [x] Every merged PR is a demo artifact
 
 ## Phase 2: First Paid Vertical - ServiceNow
 - [ ] Record real SGI workflows (incident resolution, change requests)
