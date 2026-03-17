@@ -14,6 +14,8 @@ import { TicketMiner } from "./ingest/ticket-miner";
 import type { IngestResult } from "./ingest/types";
 import { createCodingModel, inferProvider } from "./coder/providers";
 import type { CodebaseConfig, CodingProvider } from "./coder/types";
+import { GitHubWatcher } from "./workflows/github-watcher";
+import type { CodeAgent, IssueContext, CodeAgentResult } from "./workflows/issue-pipeline";
 
 // ---------------------------------------------------------------------------
 // ANSI helpers -- minimal, no dependency
@@ -649,6 +651,105 @@ async function cmdImportUrl(args: ParsedArgs) {
 }
 
 // ---------------------------------------------------------------------------
+// watch-github: Autonomous GitHub issue watcher
+// ---------------------------------------------------------------------------
+
+async function cmdWatchGitHub(args: ParsedArgs) {
+  // Imports at top of file
+
+  const owner = str(args.flags, "owner");
+  const repo  = str(args.flags, "repo");
+  const token = str(args.flags, "token", process.env.GITHUB_TOKEN ?? "");
+  const interval = num(args.flags, "interval", 60);
+  const label = str(args.flags, "label", "tierzero-agent");
+  const assignTo = typeof args.flags["assign-to"] === "string" ? args.flags["assign-to"] : undefined;
+  const workDir = str(args.flags, "workdir", process.cwd());
+  const testCmd = typeof args.flags["test-command"] === "string" ? args.flags["test-command"] : "npm test";
+
+  if (!token) die("--token or GITHUB_TOKEN env var required");
+
+  // For now, use a stub code agent that shells out to Claude Code
+  // This will be replaced with a proper LLM code agent
+  const codeAgent: CodeAgent = {
+    async solve(issue, wd) {
+      const { execSync } = await import("node:child_process");
+      const prompt = [
+        `Fix GitHub issue #${issue.number}: ${issue.title}`,
+        "",
+        issue.description,
+        "",
+        "Write the code changes and tests. Run the test command to verify.",
+      ].join("\n");
+
+      try {
+        execSync(
+          `claude --permission-mode bypassPermissions --print "${prompt.replace(/"/g, '\\"')}"`,
+          { cwd: wd, encoding: "utf-8", stdio: "pipe", timeout: 300_000 }
+        );
+      } catch {
+        // Claude Code may exit non-zero but still produce changes
+      }
+
+      // Check what files changed
+      const diff = execSync("git diff --name-only", { cwd: wd, encoding: "utf-8" }).trim();
+      const untracked = execSync("git ls-files --others --exclude-standard", { cwd: wd, encoding: "utf-8" }).trim();
+      const files = [...diff.split("\n"), ...untracked.split("\n")].filter(Boolean);
+
+      return {
+        summary: `Claude Code processed issue #${issue.number}`,
+        filesChanged: files,
+      };
+    },
+
+    async fixTests(failures, wd) {
+      const { execSync } = await import("node:child_process");
+      const prompt = `Fix these test failures:\n\n${failures.slice(0, 2000)}`;
+      try {
+        execSync(
+          `claude --permission-mode bypassPermissions --print "${prompt.replace(/"/g, '\\"')}"`,
+          { cwd: wd, encoding: "utf-8", stdio: "pipe", timeout: 300_000 }
+        );
+      } catch { /* may exit non-zero */ }
+
+      const diff = execSync("git diff --name-only", { cwd: wd, encoding: "utf-8" }).trim();
+      return {
+        summary: "Claude Code attempted test fixes",
+        filesChanged: diff ? diff.split("\n") : [],
+      };
+    },
+  };
+
+  console.log(`\n${c.bold("TierZero GitHub Watcher")}`);
+  console.log(`  ${c.dim("repo:")} ${owner}/${repo}`);
+  console.log(`  ${c.dim("label:")} ${label}`);
+  console.log(`  ${c.dim("interval:")} ${interval}s`);
+  console.log(`  ${c.dim("workdir:")} ${workDir}`);
+  if (assignTo) console.log(`  ${c.dim("assign:")} ${assignTo}`);
+  hr();
+
+  const watcher = new GitHubWatcher({
+    github: { token, owner, repo },
+    workDir,
+    pollIntervalMs: interval * 1000,
+    triggerLabel: label,
+    assignTo,
+    codeAgent,
+    testCommand: testCmd,
+  });
+
+  // Graceful shutdown
+  const shutdown = () => {
+    console.log(c.yellow("\nShutting down..."));
+    watcher.stop();
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+
+  watcher.start();
+}
+
+// ---------------------------------------------------------------------------
 // Entrypoint
 // ---------------------------------------------------------------------------
 
@@ -664,6 +765,7 @@ async function main() {
     case "import-wiki":  await cmdImportWiki(args);  break;
     case "mine-tickets": await cmdMineTickets(args); break;
     case "import-url":   await cmdImportUrl(args);   break;
+    case "watch-github": await cmdWatchGitHub(args); break;
     default:
       printHelp();
       if (command && command !== "--help" && command !== "-h") process.exit(1);
