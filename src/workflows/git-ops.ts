@@ -47,7 +47,7 @@ export class GitOps {
     const baseBranch = base ?? "main";
     this.exec(`git checkout ${baseBranch}`);
     this.exec(`git pull ${this.remote} ${baseBranch}`);
-    this.exec(`git checkout -b ${name}`);
+    try { this.exec(`git checkout -b ${name}`); } catch { this.exec(`git checkout ${name}`); }
   }
 
   /** Stage all changes and commit */
