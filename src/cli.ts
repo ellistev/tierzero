@@ -15,6 +15,7 @@ import type { IngestResult } from "./ingest/types";
 import { createCodingModel, inferProvider } from "./coder/providers";
 import type { CodebaseConfig, CodingProvider } from "./coder/types";
 import { GitHubWatcher } from "./workflows/github-watcher";
+import { spawnStreaming } from "./workflows/issue-pipeline";
 import type { CodeAgent, IssueContext, CodeAgentResult } from "./workflows/issue-pipeline";
 
 // ---------------------------------------------------------------------------
@@ -696,14 +697,17 @@ async function cmdWatchGitHub(args: ParsedArgs) {
         "Write the code changes and tests. Run the test command to verify.",
       ].join("\n");
 
+      console.log(c.dim(`\n── Claude Code (solve #${issue.number}) ──`));
       try {
-        execSync(
-          `claude --permission-mode bypassPermissions --print "${prompt.replace(/"/g, '\\"')}"`,
-          { cwd: wd, encoding: "utf-8", stdio: "pipe", timeout: 300_000 }
+        await spawnStreaming(
+          "claude",
+          ["--permission-mode", "bypassPermissions", "--print", prompt],
+          { cwd: wd, timeout: 300_000 },
         );
       } catch {
         // Claude Code may exit non-zero but still produce changes
       }
+      console.log(c.dim("── end Claude Code ──\n"));
 
       // Check what files changed
       const diff = execSync("git diff --name-only", { cwd: wd, encoding: "utf-8" }).trim();
@@ -719,12 +723,16 @@ async function cmdWatchGitHub(args: ParsedArgs) {
     async fixTests(failures, wd) {
       const { execSync } = await import("node:child_process");
       const prompt = `Fix these test failures:\n\n${failures.slice(0, 2000)}`;
+
+      console.log(c.dim("\n── Claude Code (fix tests) ──"));
       try {
-        execSync(
-          `claude --permission-mode bypassPermissions --print "${prompt.replace(/"/g, '\\"')}"`,
-          { cwd: wd, encoding: "utf-8", stdio: "pipe", timeout: 300_000 }
+        await spawnStreaming(
+          "claude",
+          ["--permission-mode", "bypassPermissions", "--print", prompt],
+          { cwd: wd, timeout: 300_000 },
         );
       } catch { /* may exit non-zero */ }
+      console.log(c.dim("── end Claude Code ──\n"));
 
       const diff = execSync("git diff --name-only", { cwd: wd, encoding: "utf-8" }).trim();
       return {

@@ -6,6 +6,7 @@
  * is delegated to an LLM-based code agent (pluggable).
  */
 
+import { spawn } from "node:child_process";
 import { GitOps } from "./git-ops";
 import { PRCreator, type PRCreatorConfig } from "./pr-creator";
 import type { GitHubConnector } from "../connectors/github";
@@ -114,6 +115,76 @@ export function parseTestOutput(output: string): TestResult {
     failing,
     output,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Streaming subprocess helper
+// ---------------------------------------------------------------------------
+
+export interface SpawnStreamingOpts {
+  cwd?: string;
+  timeout?: number;
+  onData?: (chunk: string) => void;
+}
+
+/**
+ * Spawn a command, stream stdout/stderr to a callback in real-time,
+ * and return the collected output when complete.
+ */
+export function spawnStreaming(
+  command: string,
+  args: string[],
+  opts: SpawnStreamingOpts = {},
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: opts.cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: true,
+    });
+
+    const chunks: string[] = [];
+    const onData = opts.onData ?? ((chunk: string) => process.stdout.write(chunk));
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (opts.timeout) {
+      timer = setTimeout(() => {
+        child.kill();
+        reject(new Error(`Command timed out after ${opts.timeout}ms`));
+      }, opts.timeout);
+    }
+
+    child.stdout.on("data", (buf: Buffer) => {
+      const text = buf.toString();
+      chunks.push(text);
+      onData(text);
+    });
+
+    child.stderr.on("data", (buf: Buffer) => {
+      const text = buf.toString();
+      chunks.push(text);
+      onData(text);
+    });
+
+    child.on("close", (code) => {
+      if (timer) clearTimeout(timer);
+      const output = chunks.join("");
+      if (code !== 0) {
+        const err = Object.assign(
+          new Error(`Command exited with code ${code}`),
+          { stdout: output, stderr: "", code },
+        );
+        reject(err);
+      } else {
+        resolve(output);
+      }
+    });
+
+    child.on("error", (err) => {
+      if (timer) clearTimeout(timer);
+      reject(err);
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -280,19 +351,21 @@ export class IssuePipeline {
   }
 
   private async runTests(command: string): Promise<TestResult> {
-    const { execSync } = await import("node:child_process");
+    const [cmd, ...args] = command.split(/\s+/);
     try {
-      const output = execSync(command, {
+      const output = await spawnStreaming(cmd, args, {
         cwd: this.config.workDir,
-        encoding: "utf-8",
-        stdio: "pipe",
         timeout: 120_000,
+        onData: (chunk) => {
+          for (const line of chunk.split("\n").filter(Boolean)) {
+            this.logger.log(`  ${line}`);
+          }
+        },
       });
       return parseTestOutput(output);
     } catch (err: unknown) {
-      const output = (err as { stdout?: string; stderr?: string }).stdout ?? "";
-      const stderr = (err as { stderr?: string }).stderr ?? "";
-      return parseTestOutput(output + "\n" + stderr);
+      const output = (err as { stdout?: string }).stdout ?? "";
+      return parseTestOutput(output);
     }
   }
 }
