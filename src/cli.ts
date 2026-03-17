@@ -104,6 +104,11 @@ ${c.bold("Commands:")}
   ${c.cyan("index")}  <knowledge-dir>           Index a folder of documents into ChromaDB
   ${c.cyan("search")} <query>                    Search the knowledge base (test RAG)
   ${c.cyan("run")}    <ticket-id>                Run the agent on a ticket
+  ${c.cyan("watch")}                             Continuous polling loop for ServiceNow tickets
+  ${c.cyan("watch-github")}                      Watch a GitHub repo and autonomously resolve issues
+  ${c.cyan("import-wiki")}                       Import docs from Azure DevOps or Confluence
+  ${c.cyan("mine-tickets")}                      Mine resolved tickets from ServiceNow/Jira/GitLab
+  ${c.cyan("import-url")} <urls...>              Scrape one or more URLs into the knowledge base
 
 ${c.bold("Global options:")}
   --collection <name>    ChromaDB collection name   ${c.dim("(default: knowledge)")}
@@ -171,6 +176,16 @@ ${c.bold("mine-tickets options:")}
   --min-comments <n>     Quality gate                ${c.dim("(default: 1)")}
   --since <ISO date>     Only tickets updated after this date
   --output <dir>         Output root directory       ${c.dim("(default: knowledge)")}
+
+${c.bold("watch-github options:")}
+  --owner <name>         GitHub owner (org or user)  ${c.dim("(required)")}
+  --repo <name>          GitHub repository name      ${c.dim("(required)")}
+  --token <token>        GitHub personal access token ${c.dim("(env: GITHUB_TOKEN)")}
+  --interval <s>         Poll interval in seconds    ${c.dim("(default: 60)")}
+  --label <name>         Trigger label on issues     ${c.dim("(default: tierzero-agent)")}
+  --assign-to <user>     Assign issues to this user  ${c.dim("(optional)")}
+  --workdir <path>       Working directory / repo    ${c.dim("(default: cwd)")}
+  --test-command <cmd>   Test command after edits    ${c.dim("(default: npm test)")}
 
 ${c.bold("import-url options:")}
   <urls...>              One or more URLs to scrape
