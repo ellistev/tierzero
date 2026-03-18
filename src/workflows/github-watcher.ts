@@ -49,6 +49,10 @@ export interface WatcherState {
   activeIssues: Set<string>;
   /** Issue IDs that have been completed (success or failed) */
   completedIssues: Set<string>;
+  /** Issue IDs that have permanently failed (max retries exceeded) */
+  failedIssues: Set<string>;
+  /** Retry counts per issue */
+  retryCounts: Map<string, number>;
   /** Results from completed pipelines */
   results: PipelineResult[];
 }
@@ -77,6 +81,8 @@ export class GitHubWatcher {
     this.state = {
       activeIssues: new Set(),
       completedIssues: new Set(),
+      failedIssues: new Set(),
+      retryCounts: new Map(),
       results: [],
     };
   }
@@ -132,8 +138,9 @@ export class GitHubWatcher {
       const hasLabel = t.tags?.includes(triggerLabel);
       const isActive = this.state.activeIssues.has(t.id);
       const isCompleted = this.state.completedIssues.has(t.id);
+      const isFailed = this.state.failedIssues.has(t.id);
       const hasInProgress = t.tags?.includes(this.config.inProgressLabel ?? "in-progress");
-      return hasLabel && !isActive && !isCompleted && !hasInProgress;
+      return hasLabel && !isActive && !isCompleted && !isFailed && !hasInProgress;
     });
 
     if (candidates.length === 0) return [];
@@ -173,6 +180,9 @@ export class GitHubWatcher {
   }
 
   private async runPipeline(ticket: Ticket): Promise<void> {
+    const maxRetries = 2;
+    const retryCount = this.state.retryCounts.get(ticket.id) ?? 0;
+
     const pipeline = new IssuePipeline({
       github: this.connector,
       prConfig: {
@@ -194,9 +204,26 @@ export class GitHubWatcher {
       this.logger.log(
         `#${ticket.id} ${result.status}: ${result.prUrl ?? "no PR"} (${result.testsPassed}/${result.testsRun} tests)`
       );
+
+      if (result.status === "success" || result.status === "partial") {
+        this.state.completedIssues.add(ticket.id);
+      } else if (retryCount >= maxRetries) {
+        this.logger.error(`#${ticket.id} failed after ${maxRetries + 1} attempts. Giving up.`);
+        this.state.failedIssues.add(ticket.id);
+      } else {
+        this.state.retryCounts.set(ticket.id, retryCount + 1);
+        this.logger.log(`#${ticket.id} failed, will retry (attempt ${retryCount + 1}/${maxRetries + 1})`);
+      }
+    } catch (err) {
+      if (retryCount >= maxRetries) {
+        this.logger.error(`#${ticket.id} crashed after ${maxRetries + 1} attempts: ${err}. Giving up.`);
+        this.state.failedIssues.add(ticket.id);
+      } else {
+        this.state.retryCounts.set(ticket.id, retryCount + 1);
+        this.logger.error(`#${ticket.id} crashed, will retry (attempt ${retryCount + 1}/${maxRetries + 1}): ${err}`);
+      }
     } finally {
       this.state.activeIssues.delete(ticket.id);
-      this.state.completedIssues.add(ticket.id);
     }
   }
 }

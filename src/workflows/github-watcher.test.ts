@@ -64,6 +64,8 @@ describe("GitHubWatcher", () => {
     const state = watcher.getState();
     assert.equal(state.activeIssues.size, 0);
     assert.equal(state.completedIssues.size, 0);
+    assert.equal(state.failedIssues.size, 0);
+    assert.equal(state.retryCounts.size, 0);
     assert.equal(state.results.length, 0);
   });
 

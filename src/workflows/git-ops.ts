@@ -45,9 +45,14 @@ export class GitOps {
   /** Create and checkout a new branch from base (default: main) */
   createBranch(name: string, base?: string): void {
     const baseBranch = base ?? "main";
+    // Clean any dirty state first
+    try { this.exec("git reset --hard"); } catch { /* ok */ }
+    try { this.exec("git clean -fd -e .env"); } catch { /* ok */ }
     this.exec(`git checkout ${baseBranch}`);
     this.exec(`git pull ${this.remote} ${baseBranch}`);
-    try { this.exec(`git checkout -b ${name}`); } catch { this.exec(`git checkout ${name}`); }
+    // Delete local branch if it exists, then create fresh from base
+    try { this.exec(`git branch -D ${name}`); } catch { /* didn't exist, fine */ }
+    this.exec(`git checkout -b ${name}`);
   }
 
   /** Stage all changes and commit */
@@ -57,18 +62,19 @@ export class GitOps {
     return this.exec("git rev-parse HEAD");
   }
 
-  /** Push branch to remote */
+  /** Push branch to remote (force to handle recreated branches) */
   push(branch: string): void {
-    this.exec(`git push -u ${this.remote} ${branch}`);
+    this.exec(`git push --force-with-lease -u ${this.remote} ${branch}`);
   }
 
   /** Checkout main and pull latest, nuking any dirty state */
   resetToMain(): void {
     // Force-clean any uncommitted changes or untracked files the agent left behind
-    this.exec("git reset --hard");
-    this.exec("git clean -fd");
-    this.exec("git checkout main");
-    this.exec(`git pull ${this.remote} main`);
+    // Exclude .env from clean to preserve secrets
+    try { this.exec("git reset --hard"); } catch { /* ok */ }
+    try { this.exec("git clean -fd -e .env"); } catch { /* ok */ }
+    try { this.exec("git checkout main"); } catch { /* ok */ }
+    try { this.exec(`git pull ${this.remote} main`); } catch { /* ok */ }
   }
 
   /** Get list of changed files vs base branch */
