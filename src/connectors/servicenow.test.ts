@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { _testExports } from "./servicenow";
+import { _testExports, ServiceNowConnector } from "./servicenow";
 
 const {
   STATE_MAP, STATUS_TO_STATE, PRIORITY_MAP, PRIORITY_TO_CODE,
@@ -261,5 +261,29 @@ describe("toAttachment", () => {
   test("handles non-numeric size_bytes gracefully", () => {
     const att = toAttachment({ ...base, size_bytes: "not-a-number" });
     assert.equal(att.size, undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ServiceNowConnector
+// ---------------------------------------------------------------------------
+
+describe("ServiceNowConnector", () => {
+  test("initializes with config", () => {
+    const conn = new ServiceNowConnector({
+      instanceUrl: "https://myinstance.service-now.com",
+      username: "admin",
+      password: "secret",
+    });
+    assert.equal(conn.name, "ServiceNow");
+  });
+
+  test("has a healthCheck method", () => {
+    const conn = new ServiceNowConnector({
+      instanceUrl: "https://myinstance.service-now.com",
+      username: "admin",
+      password: "secret",
+    });
+    assert.equal(typeof conn.healthCheck, "function");
   });
 });

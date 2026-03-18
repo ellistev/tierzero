@@ -21,6 +21,7 @@ import type {
   ListTicketsOptions,
   ListTicketsResult,
   AddCommentOptions,
+  HealthCheckResult,
 } from "./connector";
 
 // ---------------------------------------------------------------------------
@@ -231,6 +232,26 @@ export class ZendeskConnector implements TicketConnector {
 
     if (res.status === 204) return undefined as unknown as T;
     return res.json() as Promise<T>;
+  }
+
+  async healthCheck(): Promise<HealthCheckResult> {
+    const start = Date.now();
+    try {
+      const data = await this.request<{ user: ZDUser }>("/users/me.json");
+      return {
+        ok: true,
+        connector: this.name,
+        latencyMs: Date.now() - start,
+        details: `Authenticated as ${data.user.name}`,
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        connector: this.name,
+        latencyMs: Date.now() - start,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 
   async listTickets(options: ListTicketsOptions = {}): Promise<ListTicketsResult> {

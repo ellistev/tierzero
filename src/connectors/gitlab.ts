@@ -29,6 +29,7 @@ import type {
   ListTicketsOptions,
   ListTicketsResult,
   AddCommentOptions,
+  HealthCheckResult,
 } from "./connector";
 
 // ---------------------------------------------------------------------------
@@ -340,6 +341,26 @@ export class GitLabConnector implements TicketConnector {
     }
 
     return { data: (await res.json()) as T, headers: res.headers };
+  }
+
+  async healthCheck(): Promise<HealthCheckResult> {
+    const start = Date.now();
+    try {
+      const { data: user } = await this.request<GitLabUser>(`${this.baseUrl}/api/v4/user`);
+      return {
+        ok: true,
+        connector: this.name,
+        latencyMs: Date.now() - start,
+        details: `Authenticated as ${user.username}`,
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        connector: this.name,
+        latencyMs: Date.now() - start,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 
   async listTickets(options: ListTicketsOptions = {}): Promise<ListTicketsResult> {

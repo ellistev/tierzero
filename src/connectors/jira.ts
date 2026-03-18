@@ -25,6 +25,7 @@ import type {
   ListTicketsOptions,
   ListTicketsResult,
   AddCommentOptions,
+  HealthCheckResult,
 } from "./connector";
 
 // ---------------------------------------------------------------------------
@@ -355,6 +356,26 @@ export class JiraConnector implements TicketConnector {
     if (res.status === 204) return undefined as unknown as T;
 
     return res.json() as Promise<T>;
+  }
+
+  async healthCheck(): Promise<HealthCheckResult> {
+    const start = Date.now();
+    try {
+      const user = await this.request<JiraUser>("/rest/api/3/myself");
+      return {
+        ok: true,
+        connector: this.name,
+        latencyMs: Date.now() - start,
+        details: `Authenticated as ${user.displayName}`,
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        connector: this.name,
+        latencyMs: Date.now() - start,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 
   async listTickets(options: ListTicketsOptions = {}): Promise<ListTicketsResult> {

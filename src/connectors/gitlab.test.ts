@@ -4,6 +4,7 @@ import {
   _testExports,
   DEFAULT_IN_PROGRESS_LABELS,
   DEFAULT_PENDING_LABELS,
+  GitLabConnector,
 } from "./gitlab";
 
 const {
@@ -271,5 +272,29 @@ describe("toUser", () => {
   test("email is undefined when absent", () => {
     const user = toUser({ id: 1, name: "Bob", username: "bob" });
     assert.equal(user.email, undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GitLabConnector
+// ---------------------------------------------------------------------------
+
+describe("GitLabConnector", () => {
+  test("initializes with config", () => {
+    const conn = new GitLabConnector({
+      baseUrl: "https://gitlab.com",
+      token: "glpat-test",
+      projectId: "mygroup/myproject",
+    });
+    assert.equal(conn.name, "GitLab");
+  });
+
+  test("has a healthCheck method", () => {
+    const conn = new GitLabConnector({
+      baseUrl: "https://gitlab.com",
+      token: "glpat-test",
+      projectId: "mygroup/myproject",
+    });
+    assert.equal(typeof conn.healthCheck, "function");
   });
 });

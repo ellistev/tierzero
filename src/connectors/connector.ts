@@ -1,5 +1,13 @@
 import type { Ticket, TicketComment, TicketAttachment, UpdateTicketFields } from "./types";
 
+export interface HealthCheckResult {
+  ok: boolean;
+  connector: string;
+  latencyMs: number;
+  details?: string;
+  error?: string;
+}
+
 export interface ListTicketsOptions {
   status?: Ticket["status"] | Ticket["status"][];
   assigneeId?: string;
@@ -48,4 +56,7 @@ export interface TicketConnector {
 
   /** Update mutable fields on a ticket (status, assignee, priority). Returns the updated ticket. */
   updateTicket(ticketId: string, fields: UpdateTicketFields): Promise<Ticket>;
+
+  /** Validate connectivity and credentials with a lightweight API call. */
+  healthCheck(): Promise<HealthCheckResult>;
 }

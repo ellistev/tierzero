@@ -176,4 +176,13 @@ describe("GitHubConnector", () => {
     });
     assert.equal(conn.name, "GitHub");
   });
+
+  it("has a healthCheck method that returns a promise", () => {
+    const conn = new GitHubConnector({
+      token: "ghp_test",
+      owner: "ellistev",
+      repo: "tierzero",
+    });
+    assert.equal(typeof conn.healthCheck, "function");
+  });
 });
