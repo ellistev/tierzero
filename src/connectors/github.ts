@@ -23,6 +23,7 @@ import type {
   ListTicketsOptions,
   ListTicketsResult,
   AddCommentOptions,
+  HealthCheckResult,
 } from "./connector";
 
 // ---------------------------------------------------------------------------
@@ -371,6 +372,26 @@ export class GitHubConnector implements TicketConnector {
     }
 
     return this.getTicket(ticketId);
+  }
+
+  async healthCheck(): Promise<HealthCheckResult> {
+    const start = Date.now();
+    try {
+      const user = await this.request<GHUser>("/user");
+      return {
+        ok: true,
+        connector: this.name,
+        latencyMs: Date.now() - start,
+        details: `Authenticated as ${user.login}`,
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        connector: this.name,
+        latencyMs: Date.now() - start,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 
   // ---------------------------------------------------------------------------

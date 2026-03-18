@@ -13,6 +13,7 @@ import type {
   ListTicketsOptions,
   ListTicketsResult,
   AddCommentOptions,
+  HealthCheckResult,
 } from "./connector";
 
 export interface ServiceNowConfig {
@@ -251,6 +252,26 @@ export class ServiceNowConnector implements TicketConnector {
     }
 
     return { data: (await res.json()) as T, headers: res.headers };
+  }
+
+  async healthCheck(): Promise<HealthCheckResult> {
+    const start = Date.now();
+    try {
+      await this.request<{ result: unknown[] }>("/api/now/table/sys_user?sysparm_limit=1");
+      return {
+        ok: true,
+        connector: this.name,
+        latencyMs: Date.now() - start,
+        details: `Authenticated as ${this.config.username}`,
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        connector: this.name,
+        latencyMs: Date.now() - start,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 
   async listTickets(options: ListTicketsOptions = {}): Promise<ListTicketsResult> {

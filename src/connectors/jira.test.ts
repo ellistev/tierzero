@@ -4,6 +4,7 @@ import {
   _testExports,
   DEFAULT_TRANSITION_NAMES,
   STATUS_JQL,
+  JiraConnector,
 } from "./jira";
 
 const {
@@ -341,5 +342,29 @@ describe("STATUS_JQL", () => {
 
   test("pending JQL uses status in (...) form", () => {
     assert.ok(STATUS_JQL.pending.some((q) => q.toLowerCase().includes("pending") || q.toLowerCase().includes("on hold")));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// JiraConnector
+// ---------------------------------------------------------------------------
+
+describe("JiraConnector", () => {
+  test("initializes with config", () => {
+    const conn = new JiraConnector({
+      baseUrl: "https://mycompany.atlassian.net",
+      email: "test@example.com",
+      apiToken: "abc123",
+    });
+    assert.equal(conn.name, "Jira");
+  });
+
+  test("has a healthCheck method", () => {
+    const conn = new JiraConnector({
+      baseUrl: "https://mycompany.atlassian.net",
+      email: "test@example.com",
+      apiToken: "abc123",
+    });
+    assert.equal(typeof conn.healthCheck, "function");
   });
 });

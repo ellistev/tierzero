@@ -346,4 +346,12 @@ describe("FreshdeskConnector", () => {
     });
     assert.equal(conn.name, "Freshdesk");
   });
+
+  it("has a healthCheck method", () => {
+    const conn = new FreshdeskConnector({
+      domain: "myco.freshdesk.com",
+      apiKey: "test-key",
+    });
+    assert.equal(typeof conn.healthCheck, "function");
+  });
 });

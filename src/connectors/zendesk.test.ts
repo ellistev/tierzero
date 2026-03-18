@@ -149,4 +149,13 @@ describe("ZendeskConnector", () => {
     });
     assert.equal(conn.name, "Zendesk");
   });
+
+  it("has a healthCheck method", () => {
+    const conn = new ZendeskConnector({
+      subdomain: "mycompany",
+      email: "test@example.com",
+      apiToken: "abc123",
+    });
+    assert.equal(typeof conn.healthCheck, "function");
+  });
 });

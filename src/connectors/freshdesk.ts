@@ -21,6 +21,7 @@ import type {
   ListTicketsOptions,
   ListTicketsResult,
   AddCommentOptions,
+  HealthCheckResult,
 } from "./connector";
 
 // ---------------------------------------------------------------------------
@@ -290,6 +291,26 @@ export class FreshdeskConnector implements TicketConnector {
   }
 
   // ---- TicketConnector interface ------------------------------------------
+
+  async healthCheck(): Promise<HealthCheckResult> {
+    const start = Date.now();
+    try {
+      const agent = await this.request<{ contact: { name?: string } }>("/api/v2/agents/me");
+      return {
+        ok: true,
+        connector: this.name,
+        latencyMs: Date.now() - start,
+        details: `Authenticated as ${agent.contact?.name ?? "agent"}`,
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        connector: this.name,
+        latencyMs: Date.now() - start,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
 
   async listTickets(options: ListTicketsOptions = {}): Promise<ListTicketsResult> {
     const page = options.page ?? 1;
