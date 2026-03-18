@@ -18,6 +18,7 @@ import type { CodebaseConfig, CodingProvider } from "./coder/types";
 import { GitHubWatcher } from "./workflows/github-watcher";
 import { spawnStreaming } from "./workflows/issue-pipeline";
 import type { CodeAgent, IssueContext, CodeAgentResult } from "./workflows/issue-pipeline";
+import { ClaudeCodeAgent } from "./workflows/claude-code-agent";
 
 // ---------------------------------------------------------------------------
 // ANSI helpers -- minimal, no dependency
@@ -692,6 +693,51 @@ async function cmdWatchGitHub(args: ParsedArgs) {
   const testCmd = typeof args.flags["test-command"] === "string" ? args.flags["test-command"] : "npm test";
 
   if (!token) die("--token or GITHUB_TOKEN env var required");
+
+  // Check for --agent claude-code flag
+  const agentType = str(args.flags, "agent", "native");
+
+  if (agentType === "claude-code") {
+    // Use Claude Code CLI as the code agent (free via Max subscription)
+    const claudePath = str(args.flags, "claude-path", "claude");
+    const claudeTimeout = num(args.flags, "claude-timeout", 600);
+
+    const codeAgent = new ClaudeCodeAgent({
+      claudePath,
+      timeoutMs: claudeTimeout * 1000,
+    });
+
+    console.log(`\n${c.bold("TierZero GitHub Watcher")} ${c.cyan("(Claude Code agent)")}`);
+    console.log(`  ${c.dim("repo:")} ${owner}/${repo}`);
+    console.log(`  ${c.dim("label:")} ${label}`);
+    console.log(`  ${c.dim("interval:")} ${interval}s`);
+    console.log(`  ${c.dim("workdir:")} ${workDir}`);
+    console.log(`  ${c.dim("agent:")} Claude Code CLI`);
+    console.log(`  ${c.dim("timeout:")} ${claudeTimeout}s per issue`);
+    if (assignTo) console.log(`  ${c.dim("assign:")} ${assignTo}`);
+    hr();
+
+    const watcher = new GitHubWatcher({
+      github: { token, owner, repo },
+      workDir,
+      pollIntervalMs: interval * 1000,
+      triggerLabel: label,
+      assignTo,
+      codeAgent,
+      testCommand: testCmd,
+    });
+
+    const shutdown = () => {
+      console.log(c.yellow("\nShutting down..."));
+      watcher.stop();
+      process.exit(0);
+    };
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+
+    watcher.start();
+    return;
+  }
 
   // Parse coder config (automatically uses --coding-model, --coding-provider, etc)
   // Force fake codebase so buildCoderConfig parses the coding model args without exploding
