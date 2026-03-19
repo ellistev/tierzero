@@ -860,21 +860,60 @@ async function cmdOrchestrate(args: ParsedArgs) {
 
   const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
 
-  // Build agent registry
+  // Initialize Supervisor
+  const { AgentSupervisor } = await import("./orchestrator/supervisor");
+  const supervisor = new AgentSupervisor({
+    maxTotalAgents: config.maxConcurrent ?? 3,
+    heartbeatIntervalMs: 30_000,
+    heartbeatTimeoutMs: 120_000,
+    taskTimeoutMs: config.taskTimeoutMs ?? 900_000,
+    cleanupIntervalMs: 15_000,
+  });
+
+  // Initialize Knowledge Store (in-memory or ChromaDB)
+  let knowledgeStore: import("./knowledge/store").KnowledgeStore | undefined;
+  let knowledgeExtractor: import("./knowledge/extractor").KnowledgeExtractor | undefined;
+  const knowledgeCfg = config.knowledge ?? {};
+  if (knowledgeCfg.enabled !== false) {
+    const { InMemoryKnowledgeStore } = await import("./knowledge/in-memory-store");
+    knowledgeStore = new InMemoryKnowledgeStore();
+  }
+
+  // Wire Supervisor events to AgentProcessStore read model
+  const { AgentProcessStore } = await import("./read-models/agent-processes");
+  const agentStore = new AgentProcessStore();
+  supervisor.on("event", (event) => agentStore.apply(event));
+
+  // Start supervisor monitoring loop
+  supervisor.start();
+
+  // Build agent registry with REAL executors
+  const { createAgentExecutor } = await import("./orchestrator/agent-executor");
   const registry = new AgentRegistry();
   const agentConfigs = config.agents ?? {};
+  const adapterConfigs = config.adapters ?? {};
   for (const [name, agentCfg] of Object.entries(agentConfigs) as [string, any][]) {
+    const ghAdapterCfg = adapterConfigs.github;
     registry.register({
       name,
       type: agentCfg.type,
       capabilities: agentCfg.capabilities ?? [],
       maxConcurrent: agentCfg.maxConcurrent ?? 1,
       available: true,
-      execute: async (task: NormalizedTask): Promise<TaskResult> => {
-        // Placeholder executor - in production, dispatch to actual agents
-        console.log(`[agent:${name}] Executing task: ${task.title}`);
-        return { success: true, output: { message: "Executed by " + name }, durationMs: 0 };
-      },
+      execute: createAgentExecutor({
+        supervisor,
+        workDir: process.cwd(),
+        claudePath: config.claude?.path,
+        claudeTimeoutMs: config.claude?.timeoutMs ?? config.taskTimeoutMs ?? 900_000,
+        testCommand: config.testCommand,
+        github: ghAdapterCfg ? {
+          token: ghAdapterCfg.token ?? process.env.GITHUB_TOKEN ?? "",
+          owner: ghAdapterCfg.owner,
+          repo: ghAdapterCfg.repo,
+        } : undefined,
+        knowledgeStore,
+        knowledgeExtractor,
+      }, name),
     });
   }
 
@@ -887,7 +926,6 @@ async function cmdOrchestrate(args: ParsedArgs) {
 
   // Build adapters
   const adapters: Array<{ name: string; start: () => Promise<void>; stop: () => Promise<void> }> = [];
-  const adapterConfigs = config.adapters ?? {};
 
   if (adapterConfigs.github) {
     const ghCfg = adapterConfigs.github;
@@ -940,6 +978,11 @@ async function cmdOrchestrate(args: ParsedArgs) {
   const app = express.default();
   app.use(express.default.json());
   app.use(taskRouterApi({ store, router, registry }));
+
+  // Mount supervisor REST API
+  const { supervisorRouter } = await import("./infra/rest/supervisor-router");
+  app.use(supervisorRouter({ store: agentStore, supervisor }));
+
   const apiPort = config.apiPort ?? 3500;
 
   console.log(`\n${c.bold("TierZero Orchestrator")}`);
@@ -962,6 +1005,7 @@ async function cmdOrchestrate(args: ParsedArgs) {
 
   const shutdown = async () => {
     console.log(c.yellow("\nShutting down..."));
+    await supervisor.shutdown(10_000).catch(() => {});
     for (const adapter of adapters) {
       await adapter.stop().catch(() => {});
     }
