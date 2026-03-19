@@ -1014,6 +1014,67 @@ async function cmdOrchestrate(args: ParsedArgs) {
 
   scheduler.start();
 
+  // --- Monitoring: wire all subsystems into dashboard ---
+  const { MetricsCollector } = await import("./monitoring/metrics");
+  const { MetricsBridge } = await import("./monitoring/metrics-bridge");
+  const { AlertEngine, defaultAlertRules } = await import("./monitoring/alert-engine");
+  const { HealthAggregator } = await import("./monitoring/health-aggregator");
+  const { buildComponentCheckers } = await import("./monitoring/health-bridge");
+  const { dashboardRouter } = await import("./infra/rest/dashboard-router");
+  const { NotificationManager } = await import("./comms/notification-manager");
+
+  const metrics = new MetricsCollector();
+
+  // MetricsBridge: subscribe to EventBus and record all metrics
+  const metricsBridge = new MetricsBridge(metrics, eventBus);
+
+  // Also forward supervisor and router events through the EventBus
+  supervisor.on("event", (event) => eventBus.emit("event", event));
+  router.on("event", (event) => eventBus.emit("event", event));
+
+  metricsBridge.connect();
+
+  // AlertEngine with default rules
+  const alertEngine = new AlertEngine();
+  for (const rule of defaultAlertRules(config.maxConcurrent)) {
+    alertEngine.addRule(rule);
+  }
+
+  // NotificationManager for alert notifications
+  const notifier = new NotificationManager();
+
+  // Build component checkers from all subsystems
+  const connectors: import("./connectors/connector").TicketConnector[] = [];
+  const componentCheckers = buildComponentCheckers({
+    router,
+    agentStore,
+    connectors,
+    notifier,
+    scheduler,
+  });
+
+  // HealthAggregator: polls every 60s
+  const healthAggregator = new HealthAggregator({
+    agentStore,
+    connectors,
+    metrics,
+    alertEngine,
+    componentCheckers,
+    pollIntervalMs: 60_000,
+  });
+  healthAggregator.start();
+
+  // Alert events -> notifications
+  alertEngine.on("event", (event) => {
+    if (event.constructor?.type === "AlertTriggered") {
+      const severity = event.severity as string;
+      notifier.processEvent(
+        severity === "critical" ? "alert.critical" : "alert.warning",
+        event
+      );
+    }
+  });
+
   // Start REST API
   const app = express.default();
   app.use(express.default.json());
@@ -1025,6 +1086,9 @@ async function cmdOrchestrate(args: ParsedArgs) {
 
   // Mount scheduler REST API
   app.use(schedulerRouter({ store: schedulerStore, scheduler }));
+
+  // Mount monitoring dashboard API
+  app.use(dashboardRouter({ healthAggregator, alertEngine, metrics }));
 
   const apiPort = config.apiPort ?? 3500;
   const schedulerJobCount = scheduler.listJobs().length;
@@ -1050,6 +1114,8 @@ async function cmdOrchestrate(args: ParsedArgs) {
 
   const shutdown = async () => {
     console.log(c.yellow("\nShutting down..."));
+    healthAggregator.stop();
+    metricsBridge.disconnect();
     scheduler.stop();
     eventBus.disconnectScheduler();
     await supervisor.shutdown(10_000).catch(() => {});
