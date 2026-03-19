@@ -141,9 +141,16 @@ export class ClaudeCodeAgent implements CodeAgent {
       });
 
       const timer = setTimeout(() => {
-        child.kill("SIGKILL");
+        console.error(`[claude-code-agent] Timed out after ${this.timeoutMs}ms, killing pid ${child.pid}`);
+        // On Windows, child.kill() doesn't work for detached processes
+        // Use taskkill to kill the entire process tree
+        try {
+          execSync(`taskkill /F /T /PID ${child.pid}`, { stdio: "pipe" });
+        } catch {
+          // Process may already be dead
+          try { child.kill("SIGKILL"); } catch { /* ok */ }
+        }
         const output = chunks.join("");
-        console.error(`[claude-code-agent] Timed out after ${this.timeoutMs}ms`);
         // Resolve with whatever output we got - agent may have made changes
         resolve(output);
       }, this.timeoutMs);
