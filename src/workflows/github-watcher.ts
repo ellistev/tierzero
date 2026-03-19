@@ -46,6 +46,8 @@ export interface WatcherConfig {
   trustedAuthors?: string[];
   /** If true, only process issues from trustedAuthors. If false, process all labeled issues (UNSAFE for public repos) */
   requireTrustedAuthor?: boolean;
+  /** Callback when PR is created - used by notification system */
+  onPRCreated?: (data: { issueNumber: number; prNumber: number; prUrl: string; title: string; testsRun: number; testsPassed: number }) => void;
 }
 
 export interface WatcherLogger {
@@ -277,6 +279,7 @@ export class GitHubWatcher {
       logger: this.logger,
       autoMerge: this.config.autoMerge,
       mergeMethod: this.config.mergeMethod,
+      onPRCreated: this.config.onPRCreated,
     });
 
     try {
