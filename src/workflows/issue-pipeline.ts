@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { GitOps } from "./git-ops";
 import { PRCreator, type PRCreatorConfig } from "./pr-creator";
-import { PRReviewer, type PRReviewConfig } from "./pr-reviewer";
+import { PRReviewer, type PRReviewConfig, type PRReviewResult } from "./pr-reviewer";
 import type { GitHubConnector } from "../connectors/github";
 import type { Ticket } from "../connectors/types";
 import { IssuePipelineAggregate } from "../domain/issue-pipeline/IssuePipelineAggregate";
@@ -104,6 +104,12 @@ export interface CodeAgent {
    * Returns updated summary.
    */
   fixTests(failures: string, workDir: string): Promise<CodeAgentResult>;
+
+  /**
+   * Given review findings as fix instructions, attempt to fix the code.
+   * Returns updated summary.
+   */
+  fixReviewFindings(instructions: string, workDir: string): Promise<CodeAgentResult>;
 }
 
 export interface IssueContext {
@@ -407,7 +413,7 @@ export class IssuePipeline {
       );
       await this.emitEvents(streamId, aggregate, completeEvents);
 
-      // 8. PR Review (if enabled)
+      // 8. PR Review (if enabled) with review-fix loop
       let reviewApproved = true;
       if (this.config.prReview?.enabled !== false && testResult.passed && prResult.number) {
         if (issueContext.labels.includes("force-merge")) {
@@ -415,14 +421,64 @@ export class IssuePipeline {
         } else {
           this.logger.log("Running PR review...");
           const reviewer = new PRReviewer(this.config.prReview);
-          const diff = this.git.getDiff("main");
-          const reviewResult = reviewer.review(diff, result.filesChanged);
+          let diff = this.git.getDiff("main");
+          let reviewResult = reviewer.review(diff, result.filesChanged);
+
+          // Review-fix loop: if review fails, feed findings back to agent
+          const maxReviewFixes = 2;
+          let reviewAttempts = 0;
+
+          while (!reviewResult.approved && reviewAttempts < maxReviewFixes) {
+            reviewAttempts++;
+            this.logger.log(`Review fix attempt ${reviewAttempts}/${maxReviewFixes}`);
+
+            // Post findings as comment
+            await this.pr.commentOnPR(prResult.number, reviewer.formatFindings(reviewResult));
+
+            // Build fix instructions from findings
+            const fixInstructions = IssuePipeline.buildFixInstructions(reviewResult);
+
+            // Feed back to agent
+            await this.config.codeAgent.fixReviewFindings(fixInstructions, this.config.workDir);
+
+            // Commit fix
+            if (this.git.hasChanges()) {
+              this.git.commitAll(`fix: address review findings (attempt ${reviewAttempts})`);
+              this.git.push(branch);
+            }
+
+            // Re-run tests
+            testResult = await this.runTests(testCmd);
+            if (!testResult.passed) {
+              // Fix broke tests - try to fix those too
+              await this.config.codeAgent.fixTests(testResult.output, this.config.workDir);
+              if (this.git.hasChanges()) {
+                this.git.commitAll(`fix: repair tests after review fix (attempt ${reviewAttempts})`);
+                this.git.push(branch);
+              }
+              testResult = await this.runTests(testCmd);
+            }
+
+            // Re-run review
+            diff = this.git.getDiff("main");
+            reviewResult = reviewer.review(diff, result.filesChanged);
+
+            // Post update on PR
+            await this.pr.commentOnPR(prResult.number,
+              `## Review Fix Attempt ${reviewAttempts}: ${reviewResult.approved ? "APPROVED" : "Still failing"} (Score: ${reviewResult.score}/100)`
+            );
+          }
 
           if (!reviewResult.approved) {
-            this.logger.log(`PR review BLOCKED: score ${reviewResult.score}, ${reviewResult.findings.length} findings`);
-            await this.pr.commentOnPR(prResult.number, reviewer.formatFindings(reviewResult));
+            this.logger.log(`PR review BLOCKED after ${reviewAttempts} fix attempts: score ${reviewResult.score}, ${reviewResult.findings.length} findings`);
             reviewApproved = false;
             result.status = "partial";
+
+            // Escalation: post final summary with remaining issues
+            const remaining = reviewResult.findings.map((f) => `- **${f.rule}** \`${f.file}${f.line ? `:${f.line}` : ""}\`: ${f.message}`).join("\n");
+            await this.pr.commentOnPR(prResult.number,
+              `## TierZero Review Escalation\n\nTierZero tried ${reviewAttempts} times to fix review findings but couldn't resolve:\n\n${remaining}\n\nPlease review manually.`
+            );
 
             if (this.config.onReviewBlocked) {
               this.config.onReviewBlocked({
@@ -526,6 +582,46 @@ export class IssuePipeline {
     }
 
     return result;
+  }
+
+  /**
+   * Build fix instructions markdown from review findings.
+   */
+  static buildFixInstructions(reviewResult: PRReviewResult): string {
+    const sections: string[] = ["# Review Findings to Fix", "", "The following issues were found during PR review. Fix each one:", ""];
+
+    const errors = reviewResult.findings.filter((f) => f.severity === "error");
+    const warnings = reviewResult.findings.filter((f) => f.severity === "warning");
+    const infos = reviewResult.findings.filter((f) => f.severity === "info");
+
+    if (errors.length > 0) {
+      sections.push("## Errors (must fix)");
+      for (const f of errors) {
+        const loc = f.line ? `:${f.line}` : "";
+        sections.push(`- **${f.rule}** in \`${f.file}${loc}\`: ${f.message}`);
+      }
+      sections.push("");
+    }
+
+    if (warnings.length > 0) {
+      sections.push("## Warnings (should fix)");
+      for (const f of warnings) {
+        const loc = f.line ? `:${f.line}` : "";
+        sections.push(`- **${f.rule}** in \`${f.file}${loc}\`: ${f.message}`);
+      }
+      sections.push("");
+    }
+
+    if (infos.length > 0) {
+      sections.push("## Info (nice to fix)");
+      for (const f of infos) {
+        const loc = f.line ? `:${f.line}` : "";
+        sections.push(`- **${f.rule}** in \`${f.file}${loc}\`: ${f.message}`);
+      }
+      sections.push("");
+    }
+
+    return sections.join("\n");
   }
 
   private async runTests(command: string): Promise<TestResult> {
