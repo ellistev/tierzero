@@ -6,5 +6,18 @@
     "maxWarnings": 5,
     "useLLM": false,
     "rules": ["no-console-log", "no-todo", "test-coverage", "no-any", "file-size", "no-secrets"]
+  },
+  "scheduler": {
+    "timezone": "America/Los_Angeles",
+    "jobs": [
+      {
+        "id": "custom-check",
+        "name": "Custom Health Check",
+        "schedule": "*/30 * * * *",
+        "taskTemplate": { "title": "Custom check", "category": "monitoring" },
+        "enabled": true,
+        "maxConsecutiveFailures": 5
+      }
+    ]
   }
 }
