@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import { GitOps } from "./git-ops";
 import { PRCreator, type PRCreatorConfig } from "./pr-creator";
 import { PRReviewer, type PRReviewConfig, type PRReviewResult } from "./pr-reviewer";
+import { LLMReviewer } from "./llm-reviewer";
 import type { GitHubConnector } from "../connectors/github";
 import type { Ticket } from "../connectors/types";
 import { IssuePipelineAggregate } from "../domain/issue-pipeline/IssuePipelineAggregate";
@@ -421,8 +422,24 @@ export class IssuePipeline {
         } else {
           this.logger.log("Running PR review...");
           const reviewer = new PRReviewer(this.config.prReview);
+          const useLLM = this.config.prReview?.useLLM === true && !!this.config.prReview?.llmAdapter;
           let diff = this.git.getDiff("main");
-          let reviewResult = reviewer.review(diff, result.filesChanged);
+
+          // Context options for LLM deep review
+          const contextOpts = {
+            workDir: this.config.workDir,
+            issueTitle: issueContext.title,
+            issueBody: issueContext.description,
+            testOutput: testResult.output,
+          };
+
+          let reviewResult: PRReviewResult;
+          if (useLLM) {
+            this.logger.log("Running static rules + LLM deep review...");
+            reviewResult = await reviewer.deepReview(diff, result.filesChanged, contextOpts);
+          } else {
+            reviewResult = reviewer.review(diff, result.filesChanged);
+          }
 
           // Review-fix loop: if review fails, feed findings back to agent
           const maxReviewFixes = 2;
@@ -435,8 +452,11 @@ export class IssuePipeline {
             // Post findings as comment
             await this.pr.commentOnPR(prResult.number, reviewer.formatFindings(reviewResult));
 
-            // Build fix instructions from findings
-            const fixInstructions = IssuePipeline.buildFixInstructions(reviewResult);
+            // Build fix instructions from findings (include LLM suggestions if available)
+            let fixInstructions = IssuePipeline.buildFixInstructions(reviewResult);
+            if (reviewResult.llmReview) {
+              fixInstructions += "\n\n" + LLMReviewer.buildFixInstructions(reviewResult.llmReview);
+            }
 
             // Feed back to agent
             await this.config.codeAgent.fixReviewFindings(fixInstructions, this.config.workDir);
@@ -461,7 +481,12 @@ export class IssuePipeline {
 
             // Re-run review
             diff = this.git.getDiff("main");
-            reviewResult = reviewer.review(diff, result.filesChanged);
+            if (useLLM) {
+              contextOpts.testOutput = testResult.output;
+              reviewResult = await reviewer.deepReview(diff, result.filesChanged, contextOpts);
+            } else {
+              reviewResult = reviewer.review(diff, result.filesChanged);
+            }
 
             // Post update on PR
             await this.pr.commentOnPR(prResult.number,

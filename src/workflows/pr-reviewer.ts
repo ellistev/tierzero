@@ -7,6 +7,8 @@
  */
 
 import { builtinRules, parseDiff, type ReviewFinding, type ReviewRule, type DiffFile } from "./review-rules";
+import { LLMReviewer, type LLMReviewResult, type LLMAdapter } from "./llm-reviewer";
+import { gatherReviewContext, type GatherContextOptions, type ReviewContext } from "./review-context";
 
 export type { ReviewFinding };
 
@@ -15,6 +17,8 @@ export interface PRReviewResult {
   score: number;
   findings: ReviewFinding[];
   summary: string;
+  /** LLM deep review result, present when useLLM is enabled */
+  llmReview?: LLMReviewResult;
 }
 
 export interface PRReviewConfig {
@@ -30,6 +34,8 @@ export interface PRReviewConfig {
   maxErrors?: number;
   /** Max warnings before blocking merge (default: 5) */
   maxWarnings?: number;
+  /** LLM adapter for deep review (required when useLLM is true) */
+  llmAdapter?: LLMAdapter;
 }
 
 export class PRReviewer {
@@ -55,7 +61,7 @@ export class PRReviewer {
   }
 
   /**
-   * Review a diff string and list of changed files.
+   * Review a diff string and list of changed files (static rules only).
    */
   review(diffText: string, filesChanged: string[]): PRReviewResult {
     const diffFiles = parseDiff(diffText);
@@ -85,6 +91,55 @@ export class PRReviewer {
     const summary = this.buildSummary(findings, score, approved);
 
     return { approved, score, findings, summary };
+  }
+
+  /**
+   * Run static rules + LLM deep review.
+   * Static rules run first as a fast/cheap pass; LLM review runs second
+   * for deeper analysis when useLLM is enabled.
+   */
+  async deepReview(
+    diffText: string,
+    filesChanged: string[],
+    contextOpts: Omit<GatherContextOptions, "diffText" | "filesChanged">,
+  ): Promise<PRReviewResult> {
+    // 1. Static rules (always run)
+    const staticResult = this.review(diffText, filesChanged);
+
+    // 2. LLM deep review (if enabled and adapter provided)
+    if (!this.config.useLLM || !this.config.llmAdapter) {
+      return staticResult;
+    }
+
+    const context = gatherReviewContext({
+      diffText,
+      filesChanged,
+      ...contextOpts,
+    });
+
+    const llmReviewer = new LLMReviewer(this.config.llmAdapter);
+    const llmResult = await llmReviewer.review(diffText, context);
+
+    // 3. Merge: static findings + LLM verdict
+    // The final approval requires BOTH static and LLM to approve
+    const approved = staticResult.approved && llmResult.approved;
+
+    // Combine summaries
+    const summary = [
+      staticResult.summary,
+      "",
+      "---",
+      "",
+      LLMReviewer.formatReviewComment(llmResult),
+    ].join("\n");
+
+    return {
+      approved,
+      score: llmResult.overallScore, // Use LLM's weighted score as the primary score
+      findings: staticResult.findings,
+      summary,
+      llmReview: llmResult,
+    };
   }
 
   /**
