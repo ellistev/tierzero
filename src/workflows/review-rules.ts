@@ -209,7 +209,7 @@ export const fileSize: ReviewRule = {
 
 export const noSecrets: ReviewRule = {
   name: "no-secrets",
-  description: "No hardcoded API keys, tokens, passwords in diff",
+  description: "No hardcoded API keys, tokens, passwords, encoded secrets, connection strings, or private keys in diff",
   check(diff: DiffFile[]): ReviewFinding[] {
     const findings: ReviewFinding[] = [];
     const patterns = [
@@ -219,6 +219,11 @@ export const noSecrets: ReviewRule = {
       { regex: /(?:sk-[a-zA-Z0-9]{32,})/, label: "OpenAI API key" },
       { regex: /(?:xoxb|xoxp|xapp)-[a-zA-Z0-9-]+/, label: "Slack token" },
       { regex: /AKIA[0-9A-Z]{16}/, label: "AWS access key" },
+      { regex: /(?:postgres|mysql|mongodb|redis):\/\/[^:]+:[^@]+@[^/\s"']+/, label: "connection string with credentials" },
+      { regex: /-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----/, label: "private key" },
+      { regex: /Bearer\s+[a-zA-Z0-9_\-.]{20,}/, label: "Bearer token" },
+      { regex: /eyJ[a-zA-Z0-9_-]{20,}\.eyJ[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,}/, label: "JWT token" },
+      { regex: /(?:secret|token|key|credential)\s*[:=]\s*["'][A-Za-z0-9+/]{40,}={0,2}["']/i, label: "possible base64-encoded secret" },
     ];
 
     for (const file of diff) {
