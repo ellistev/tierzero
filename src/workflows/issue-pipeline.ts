@@ -15,10 +15,20 @@ import type { Ticket } from "../connectors/types";
 import { IssuePipelineAggregate } from "../domain/issue-pipeline/IssuePipelineAggregate";
 import { StartPipeline, CompleteAgentWork, RecordTestRun, RecordTestFix, CreatePR, CompletePipeline, FailPipeline } from "../domain/issue-pipeline/commands";
 import type { IEventStore, ESEventData } from "../infra/interfaces";
+import type { Deployer, DeployConfig } from "../deploy/deployer";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+export interface AutoDeployConfig {
+  /** Whether to auto-deploy after PR merge */
+  enabled: boolean;
+  /** Target environment for auto-deploy */
+  environment: string;
+  /** Deploy configuration */
+  deployConfig: DeployConfig;
+}
 
 export interface PipelineConfig {
   /** GitHub connector for issue updates */
@@ -45,6 +55,10 @@ export interface PipelineConfig {
   autoMerge?: boolean;
   /** Merge method (default: "squash") */
   mergeMethod?: "merge" | "squash" | "rebase";
+  /** Auto-deploy configuration */
+  autoDeploy?: AutoDeployConfig;
+  /** Deployer instance for auto-deploy */
+  deployer?: Deployer;
 }
 
 export interface PipelineLogger {
@@ -398,7 +412,30 @@ export class IssuePipeline {
         }
       }
 
-      // 9. Update issue
+      // 9. Auto-deploy after merge if configured
+      if (this.config.autoDeploy?.enabled && this.config.deployer && this.config.autoMerge && testResult.passed) {
+        this.logger.log(`Auto-deploying to ${this.config.autoDeploy.environment}...`);
+        try {
+          const deployResult = await this.config.deployer.deploy({
+            environment: this.config.autoDeploy.environment,
+            version: branch,
+            config: this.config.autoDeploy.deployConfig,
+          });
+          if (deployResult.success) {
+            this.logger.log(`Deploy to ${this.config.autoDeploy.environment} succeeded`);
+            (result as PipelineResult & { deployResult?: unknown }).deployResult = deployResult;
+          } else {
+            this.logger.error(`Deploy failed: ${deployResult.error}`);
+            if (deployResult.rolledBack) {
+              this.logger.log("Deployment was rolled back automatically");
+            }
+          }
+        } catch (deployErr) {
+          this.logger.error(`Auto-deploy failed: ${deployErr instanceof Error ? deployErr.message : String(deployErr)}`);
+        }
+      }
+
+      // 10. Update issue
       const statusEmoji = testResult.passed ? "✅" : "⚠️";
       const mergeStatus = this.config.autoMerge && testResult.passed ? " (auto-merged)" : "";
       await this.config.github.addComment(
