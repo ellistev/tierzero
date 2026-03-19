@@ -98,28 +98,77 @@ function bool(flags: ParsedArgs["flags"], key: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Version
+// ---------------------------------------------------------------------------
+
+function getVersion(): string {
+  try {
+    const fs = require("fs");
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf-8"));
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.1.0";
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Help
 // ---------------------------------------------------------------------------
 
 function printHelp() {
+  const version = getVersion();
   log.info(`
-${c.bold("operation-agent-steve")} -- AI ticket resolution agent
+${c.bold("TierZero")} v${version} — Autonomous agent framework
 
-${c.bold("Commands:")}
+${c.bold("Primary commands:")}
+  ${c.cyan("orchestrate")}                       Start the orchestrator (recommended entry point)
+  ${c.cyan("status")}                            Show current system state
+  ${c.cyan("init")}                              Generate orchestrator.json config
 
-  ${c.cyan("index")}  <knowledge-dir>           Index a folder of documents into ChromaDB
-  ${c.cyan("search")} <query>                    Search the knowledge base (test RAG)
-  ${c.cyan("run")}    <ticket-id>                Run the agent on a ticket
-  ${c.cyan("watch")}                             Continuous polling loop for ServiceNow tickets
-  ${c.cyan("watch-github")}                      Watch a GitHub repo and autonomously resolve issues
+${c.bold("Secondary commands:")}
+  ${c.cyan("index")}  <knowledge-dir>            Index documents into ChromaDB
+  ${c.cyan("search")} <query>                    Search the knowledge base
+  ${c.cyan("run")}    <ticket-id>                Run the agent on a single ticket
+  ${c.cyan("watch")}                             Poll ServiceNow for tickets
+  ${c.cyan("watch-github")}                      ${c.yellow("[deprecated]")} Use 'orchestrate' instead
   ${c.cyan("import-wiki")}                       Import docs from Azure DevOps or Confluence
-  ${c.cyan("mine-tickets")}                      Mine resolved tickets from ServiceNow/Jira/GitLab/Freshdesk
-  ${c.cyan("import-url")} <urls...>              Scrape one or more URLs into the knowledge base
-  ${c.cyan("orchestrate")}                      Central task router for multi-source input
+  ${c.cyan("mine-tickets")}                      Mine resolved tickets
+  ${c.cyan("import-url")} <urls...>              Scrape URLs into the knowledge base
+
+${c.bold("Examples:")}
+  ${c.dim("# Initialize a new project")}
+  npx tsx src/cli.ts init --owner myorg --repo myapp
+
+  ${c.dim("# Start the orchestrator")}
+  npx tsx src/cli.ts orchestrate --config orchestrator.json
+
+  ${c.dim("# Check system status")}
+  npx tsx src/cli.ts status
+
+  ${c.dim("# Index knowledge base and search")}
+  npx tsx src/cli.ts index ./docs
+  npx tsx src/cli.ts search "how to deploy"
 
 ${c.bold("Global options:")}
+  --help                 Show this help message
+  --version              Show version number
   --collection <name>    ChromaDB collection name   ${c.dim("(default: knowledge)")}
   --chroma-url <url>     ChromaDB server URL         ${c.dim("(default: http://localhost:8000)")}
+
+${c.bold("orchestrate options:")}
+  --config <path>        Config file path            ${c.dim("(default: orchestrator.json)")}
+  --skip-health-check    Skip startup health checks
+
+${c.bold("status options:")}
+  --port <n>             API port to query           ${c.dim("(default: 3500)")}
+
+${c.bold("init options:")}
+  --owner <name>         GitHub owner (org or user)
+  --repo <name>          GitHub repository name
+  --agent <type>         Agent type                  ${c.dim("(default: claude-code)")}
+  --interval <s>         Poll interval in seconds    ${c.dim("(default: 180)")}
+  --output <path>        Output file path            ${c.dim("(default: orchestrator.json)")}
+  --force                Overwrite existing config
 
 ${c.bold("index options:")}
   --chunk-size <n>       Characters per chunk        ${c.dim("(default: 1000)")}
@@ -184,16 +233,6 @@ ${c.bold("mine-tickets options:")}
   --min-comments <n>     Quality gate                ${c.dim("(default: 1)")}
   --since <ISO date>     Only tickets updated after this date
   --output <dir>         Output root directory       ${c.dim("(default: knowledge)")}
-
-${c.bold("watch-github options:")}
-  --owner <name>         GitHub owner (org or user)  ${c.dim("(required)")}
-  --repo <name>          GitHub repository name      ${c.dim("(required)")}
-  --token <token>        GitHub personal access token ${c.dim("(env: GITHUB_TOKEN)")}
-  --interval <s>         Poll interval in seconds    ${c.dim("(default: 60)")}
-  --label <name>         Trigger label on issues     ${c.dim("(default: tierzero-agent)")}
-  --assign-to <user>     Assign issues to this user  ${c.dim("(optional)")}
-  --workdir <path>       Working directory / repo    ${c.dim("(default: cwd)")}
-  --test-command <cmd>   Test command after edits    ${c.dim("(default: npm test)")}
 
 ${c.bold("import-url options:")}
   <urls...>              One or more URLs to scrape
@@ -685,7 +724,9 @@ async function cmdImportUrl(args: ParsedArgs) {
 // ---------------------------------------------------------------------------
 
 async function cmdWatchGitHub(args: ParsedArgs) {
-  // Imports at top of file
+  log.warn(c.yellow("WARNING: 'watch-github' is deprecated and will be removed in the next major version."));
+  log.warn(c.yellow("         Use 'orchestrate' instead for the recommended entry point."));
+  log.info("");
 
   const owner = str(args.flags, "owner");
   const repo  = str(args.flags, "repo");
@@ -876,6 +917,16 @@ async function cmdOrchestrate(args: ParsedArgs) {
   if (!fs.existsSync(configPath)) die(`Config file not found: ${configPath}`);
 
   const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+
+  // --- Startup health check ---
+  if (!bool(args.flags, "skip-health-check")) {
+    const { runStartupHealthCheck, printStartupSummary } = await import("./cli/startup-health");
+    const healthResult = await runStartupHealthCheck(config, { skipNetwork: false });
+    printStartupSummary(healthResult);
+    if (healthResult.critical) {
+      die("Startup health check failed. Fix the errors above or use --skip-health-check to bypass.");
+    }
+  }
 
   // Initialize Supervisor
   const { AgentSupervisor } = await import("./orchestrator/supervisor");
@@ -1176,6 +1227,12 @@ async function main() {
   const command = process.argv[2];
   const args = parseArgs(process.argv.slice(3));
 
+  // Handle --version flag
+  if (command === "--version" || args.flags["version"] === true) {
+    log.info(getVersion());
+    return;
+  }
+
   switch (command) {
     case "index":        await cmdIndex(args);        break;
     case "search":       await cmdSearch(args);       break;
@@ -1186,6 +1243,24 @@ async function main() {
     case "import-url":   await cmdImportUrl(args);   break;
     case "watch-github": await cmdWatchGitHub(args); break;
     case "orchestrate":  await cmdOrchestrate(args); break;
+    case "status": {
+      const { cmdStatus } = await import("./cli/status-command");
+      const port = num(args.flags, "port", 3500);
+      await cmdStatus(port);
+      break;
+    }
+    case "init": {
+      const { cmdInit } = await import("./cli/init-command");
+      await cmdInit({
+        owner: typeof args.flags["owner"] === "string" ? args.flags["owner"] : undefined,
+        repo: typeof args.flags["repo"] === "string" ? args.flags["repo"] : undefined,
+        agent: typeof args.flags["agent"] === "string" ? args.flags["agent"] : undefined,
+        interval: typeof args.flags["interval"] === "string" ? Number(args.flags["interval"]) : undefined,
+        output: typeof args.flags["output"] === "string" ? args.flags["output"] : undefined,
+        force: bool(args.flags, "force"),
+      });
+      break;
+    }
     default:
       printHelp();
       if (command && command !== "--help" && command !== "-h") process.exit(1);
