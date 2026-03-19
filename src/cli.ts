@@ -112,6 +112,7 @@ ${c.bold("Commands:")}
   ${c.cyan("import-wiki")}                       Import docs from Azure DevOps or Confluence
   ${c.cyan("mine-tickets")}                      Mine resolved tickets from ServiceNow/Jira/GitLab/Freshdesk
   ${c.cyan("import-url")} <urls...>              Scrape one or more URLs into the knowledge base
+  ${c.cyan("orchestrate")}                      Central task router for multi-source input
 
 ${c.bold("Global options:")}
   --collection <name>    ChromaDB collection name   ${c.dim("(default: knowledge)")}
@@ -838,6 +839,140 @@ async function cmdWatchGitHub(args: ParsedArgs) {
 }
 
 // ---------------------------------------------------------------------------
+// orchestrate: Central task router
+// ---------------------------------------------------------------------------
+
+async function cmdOrchestrate(args: ParsedArgs) {
+  const { TaskRouter } = await import("./orchestrator/task-router");
+  const { AgentRegistry } = await import("./orchestrator/agent-registry");
+  type NormalizedTask = import("./orchestrator/agent-registry").NormalizedTask;
+  type TaskResult = import("./orchestrator/agent-registry").TaskResult;
+  const { TaskQueueStore } = await import("./read-models/task-queue");
+  const { taskRouterApi } = await import("./infra/rest/task-router-api");
+  const { GitHubAdapter } = await import("./orchestrator/adapters/github-adapter");
+  const { WebhookAdapter } = await import("./orchestrator/adapters/webhook-adapter");
+  const { ScheduleAdapter } = await import("./orchestrator/adapters/schedule-adapter");
+  const express = await import("express");
+  const fs = await import("fs");
+
+  const configPath = str(args.flags, "config", "orchestrator.json");
+  if (!fs.existsSync(configPath)) die(`Config file not found: ${configPath}`);
+
+  const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+
+  // Build agent registry
+  const registry = new AgentRegistry();
+  const agentConfigs = config.agents ?? {};
+  for (const [name, agentCfg] of Object.entries(agentConfigs) as [string, any][]) {
+    registry.register({
+      name,
+      type: agentCfg.type,
+      capabilities: agentCfg.capabilities ?? [],
+      maxConcurrent: agentCfg.maxConcurrent ?? 1,
+      available: true,
+      execute: async (task: NormalizedTask): Promise<TaskResult> => {
+        // Placeholder executor - in production, dispatch to actual agents
+        console.log(`[agent:${name}] Executing task: ${task.title}`);
+        return { success: true, output: { message: "Executed by " + name }, durationMs: 0 };
+      },
+    });
+  }
+
+  // Build task router
+  const router = new TaskRouter({ registry });
+  const store = new TaskQueueStore();
+
+  // Wire events to read model
+  router.on("event", (event) => store.apply(event));
+
+  // Build adapters
+  const adapters: Array<{ name: string; start: () => Promise<void>; stop: () => Promise<void> }> = [];
+  const adapterConfigs = config.adapters ?? {};
+
+  if (adapterConfigs.github) {
+    const ghCfg = adapterConfigs.github;
+    const adapter = new GitHubAdapter({
+      owner: ghCfg.owner,
+      repo: ghCfg.repo,
+      token: ghCfg.token ?? process.env.GITHUB_TOKEN ?? "",
+      label: ghCfg.label ?? "tierzero-agent",
+      interval: ghCfg.interval ?? 180,
+    });
+    adapter.onTask = (source) => {
+      const payload = source.payload as any;
+      router.submit(source, payload?.title ?? "GitHub Issue", payload?.body ?? "", "code");
+    };
+    adapters.push(adapter);
+  }
+
+  if (adapterConfigs.webhook) {
+    const whCfg = adapterConfigs.webhook;
+    const adapter = new WebhookAdapter({ port: whCfg.port ?? 3500 });
+    adapter.onTask = (source) => {
+      const payload = source.payload as any;
+      router.submit(
+        source,
+        payload?.title ?? "Webhook task",
+        payload?.description ?? "",
+        payload?.category ?? "operations"
+      );
+    };
+    adapters.push(adapter);
+  }
+
+  if (adapterConfigs.schedule && Array.isArray(adapterConfigs.schedule)) {
+    const schedules = adapterConfigs.schedule.map((s: any) => ({
+      id: s.id,
+      cron: s.cron,
+      taskTemplate: s.task ?? {},
+      enabled: s.enabled !== false,
+    }));
+    const adapter = new ScheduleAdapter(schedules);
+    adapter.onTask = (source) => {
+      const payload = source.payload as any;
+      const tmpl = payload?.template ?? {};
+      router.submit(source, tmpl.title ?? "Scheduled task", tmpl.description ?? "", tmpl.category ?? "monitoring");
+    };
+    adapters.push(adapter);
+  }
+
+  // Start REST API
+  const app = express.default();
+  app.use(express.default.json());
+  app.use(taskRouterApi({ store, router, registry }));
+  const apiPort = config.apiPort ?? 3500;
+
+  console.log(`\n${c.bold("TierZero Orchestrator")}`);
+  console.log(`  ${c.dim("agents:")} ${Object.keys(agentConfigs).join(", ") || "none"}`);
+  console.log(`  ${c.dim("adapters:")} ${adapters.map(a => a.name).join(", ") || "none"}`);
+  console.log(`  ${c.dim("API:")} http://localhost:${apiPort}`);
+  hr();
+
+  const server = app.listen(apiPort, () => {
+    console.log(`REST API listening on port ${apiPort}`);
+  });
+
+  // Start all adapters
+  for (const adapter of adapters) {
+    await adapter.start();
+    console.log(`Adapter "${adapter.name}" started`);
+  }
+
+  console.log(c.dim("\nPress Ctrl+C to stop.\n"));
+
+  const shutdown = async () => {
+    console.log(c.yellow("\nShutting down..."));
+    for (const adapter of adapters) {
+      await adapter.stop().catch(() => {});
+    }
+    server.close();
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
+
+// ---------------------------------------------------------------------------
 // Entrypoint
 // ---------------------------------------------------------------------------
 
@@ -854,6 +989,7 @@ async function main() {
     case "mine-tickets": await cmdMineTickets(args); break;
     case "import-url":   await cmdImportUrl(args);   break;
     case "watch-github": await cmdWatchGitHub(args); break;
+    case "orchestrate":  await cmdOrchestrate(args); break;
     default:
       printHelp();
       if (command && command !== "--help" && command !== "-h") process.exit(1);
