@@ -77,6 +77,12 @@ export class GitOps {
     try { this.exec(`git pull ${this.remote} main`); } catch { /* ok */ }
   }
 
+  /** Get unified diff vs base branch */
+  getDiff(baseBranch?: string): string {
+    const base = baseBranch ?? "main";
+    return this.exec(`git diff ${base}...HEAD`);
+  }
+
   /** Get list of changed files vs base branch */
   getChangedFiles(baseBranch?: string): string[] {
     const base = baseBranch ?? "main";
