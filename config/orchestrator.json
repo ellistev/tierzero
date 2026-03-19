@@ -1,0 +1,10 @@
+{
+  "prReview": {
+    "enabled": true,
+    "minScore": 70,
+    "maxErrors": 0,
+    "maxWarnings": 5,
+    "useLLM": false,
+    "rules": ["no-console-log", "no-todo", "test-coverage", "no-any", "file-size", "no-secrets"]
+  }
+}

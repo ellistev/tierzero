@@ -10,6 +10,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { GitOps } from "./git-ops";
 import { PRCreator, type PRCreatorConfig } from "./pr-creator";
+import { PRReviewer, type PRReviewConfig } from "./pr-reviewer";
 import type { GitHubConnector } from "../connectors/github";
 import type { Ticket } from "../connectors/types";
 import { IssuePipelineAggregate } from "../domain/issue-pipeline/IssuePipelineAggregate";
@@ -55,6 +56,10 @@ export interface PipelineConfig {
   autoMerge?: boolean;
   /** Merge method (default: "squash") */
   mergeMethod?: "merge" | "squash" | "rebase";
+  /** PR review configuration */
+  prReview?: PRReviewConfig;
+  /** Callback when PR review blocks merge */
+  onReviewBlocked?: (data: { prNumber: number; score: number; findings: number; errors: number }) => void;
   /** Auto-deploy configuration */
   autoDeploy?: AutoDeployConfig;
   /** Deployer instance for auto-deploy */
@@ -398,8 +403,40 @@ export class IssuePipeline {
       );
       await this.emitEvents(streamId, aggregate, completeEvents);
 
-      // 8. Auto-merge if enabled and tests pass
-      if (this.config.autoMerge && testResult.passed && prResult.number) {
+      // 8. PR Review (if enabled)
+      let reviewApproved = true;
+      if (this.config.prReview?.enabled !== false && testResult.passed && prResult.number) {
+        if (issueContext.labels.includes("force-merge")) {
+          this.logger.log("force-merge label detected, skipping review");
+        } else {
+          this.logger.log("Running PR review...");
+          const reviewer = new PRReviewer(this.config.prReview);
+          const diff = this.git.getDiff("main");
+          const reviewResult = reviewer.review(diff, result.filesChanged);
+
+          if (!reviewResult.approved) {
+            this.logger.log(`PR review BLOCKED: score ${reviewResult.score}, ${reviewResult.findings.length} findings`);
+            await this.pr.commentOnPR(prResult.number, reviewer.formatFindings(reviewResult));
+            reviewApproved = false;
+            result.status = "partial";
+
+            if (this.config.onReviewBlocked) {
+              this.config.onReviewBlocked({
+                prNumber: prResult.number,
+                score: reviewResult.score,
+                findings: reviewResult.findings.length,
+                errors: reviewResult.findings.filter((f) => f.severity === "error").length,
+              });
+            }
+          } else {
+            this.logger.log(`PR review APPROVED: score ${reviewResult.score}`);
+            await this.pr.commentOnPR(prResult.number, `## TierZero Review: ${reviewResult.score}/100\n\n${reviewResult.summary}`);
+          }
+        }
+      }
+
+      // 9. Auto-merge if enabled and tests pass and review approved
+      if (this.config.autoMerge && testResult.passed && prResult.number && reviewApproved) {
         this.logger.log(`Auto-merging PR #${prResult.number}...`);
         try {
           await this.pr.mergePR(prResult.number, this.config.mergeMethod ?? "squash");
@@ -412,7 +449,7 @@ export class IssuePipeline {
         }
       }
 
-      // 9. Auto-deploy after merge if configured
+      // 10. Auto-deploy after merge if configured
       if (this.config.autoDeploy?.enabled && this.config.deployer && this.config.autoMerge && testResult.passed) {
         this.logger.log(`Auto-deploying to ${this.config.autoDeploy.environment}...`);
         try {
@@ -435,7 +472,7 @@ export class IssuePipeline {
         }
       }
 
-      // 10. Update issue
+      // 11. Update issue
       const statusEmoji = testResult.passed ? "✅" : "⚠️";
       const mergeStatus = this.config.autoMerge && testResult.passed ? " (auto-merged)" : "";
       await this.config.github.addComment(

@@ -108,6 +108,14 @@ export class PRCreator {
     };
   }
 
+  /** Comment on a pull request (or issue) */
+  async commentOnPR(prNumber: number, body: string): Promise<void> {
+    await this.request(`/repos/${this.owner}/${this.repo}/issues/${prNumber}/comments`, {
+      method: "POST",
+      body: JSON.stringify({ body }),
+    });
+  }
+
   /** Merge a pull request */
   async mergePR(prNumber: number, method: "merge" | "squash" | "rebase" = "squash"): Promise<void> {
     await this.request(`/repos/${this.owner}/${this.repo}/pulls/${prNumber}/merge`, {
