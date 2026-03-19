@@ -41,6 +41,10 @@ export interface WatcherConfig {
   autoMerge?: boolean;
   /** Merge method (default: "squash") */
   mergeMethod?: "merge" | "squash" | "rebase";
+  /** GitHub usernames allowed to create issues the watcher will process */
+  trustedAuthors?: string[];
+  /** If true, only process issues from trustedAuthors. If false, process all labeled issues (UNSAFE for public repos) */
+  requireTrustedAuthor?: boolean;
 }
 
 export interface WatcherLogger {
@@ -102,6 +106,15 @@ export class GitHubWatcher {
       this.logger.log(`Auto-merge: enabled (${this.config.mergeMethod ?? "squash"})`);
     }
 
+    // Security: warn if author filtering is disabled
+    if (this.config.requireTrustedAuthor === false) {
+      this.logger.log(`⚠️  WARNING: Author filtering disabled. ANY labeled issue will be processed.`);
+      this.logger.log(`⚠️  This is UNSAFE on public repositories. Set trustedAuthors to restrict.`);
+    } else {
+      const trusted = this.config.trustedAuthors ?? [this.config.github.owner];
+      this.logger.log(`Trusted authors: ${trusted.join(", ")}`);
+    }
+
     // Run immediately, then on interval
     // Use an async wrapper to keep the process alive even if poll throws
     const safePoll = async () => {
@@ -153,7 +166,19 @@ export class GitHubWatcher {
       const isCompleted = this.state.completedIssues.has(t.id);
       const isFailed = this.state.failedIssues.has(t.id);
       const hasInProgress = t.tags?.includes(this.config.inProgressLabel ?? "in-progress");
-      return hasLabel && !isActive && !isCompleted && !isFailed && !hasInProgress;
+      if (!hasLabel || isActive || isCompleted || isFailed || hasInProgress) return false;
+
+      // Security: only process issues from trusted authors
+      if (this.config.requireTrustedAuthor !== false) {
+        const trusted = this.config.trustedAuthors ?? [this.config.github.owner];
+        const author = t.reporter?.name ?? t.reporter?.id;
+        if (!trusted.includes(author)) {
+          this.logger.log(`Skipping #${t.id}: author "${author}" not in trusted list`);
+          return false;
+        }
+      }
+
+      return true;
     });
 
     if (candidates.length === 0) return [];
@@ -192,9 +217,48 @@ export class GitHubWatcher {
     return toProcess;
   }
 
+  /**
+   * Sanitize issue content: detect suspicious shell injection patterns.
+   * Returns { sanitized, warnings } where warnings lists any suspicious patterns found.
+   */
+  static sanitizeContent(body: string): { sanitized: string; warnings: string[] } {
+    const warnings: string[] = [];
+    const patterns: Array<{ regex: RegExp; label: string }> = [
+      { regex: /`[^`]*`/g, label: "backtick command substitution" },
+      { regex: /\$\([^)]*\)/g, label: "$(command) substitution" },
+      { regex: /;\s*(rm|curl|wget|nc|bash|sh|eval|exec)\b/gi, label: "chained shell command" },
+      { regex: /\|\s*(bash|sh|zsh)\b/gi, label: "pipe to shell" },
+      { regex: />\s*\/etc\//g, label: "write to /etc/" },
+      { regex: /\bsudo\b/gi, label: "sudo usage" },
+    ];
+
+    for (const { regex, label } of patterns) {
+      const matches = body.match(regex);
+      if (matches) {
+        warnings.push(`Suspicious pattern (${label}): ${matches.slice(0, 3).join(", ")}`);
+      }
+    }
+
+    return { sanitized: body, warnings };
+  }
+
   private async runPipeline(ticket: Ticket): Promise<void> {
     const maxRetries = 2;
     const retryCount = this.state.retryCounts.get(ticket.id) ?? 0;
+
+    // Audit trail: log full issue content before processing
+    this.logger.log(`[audit] Processing #${ticket.id} by ${ticket.reporter?.name ?? ticket.reporter?.id ?? "unknown"}: ${ticket.title}`);
+    if (ticket.description) {
+      this.logger.log(`[audit] Issue body: ${ticket.description}`);
+    }
+
+    // Sanitize issue content and warn on suspicious patterns
+    if (ticket.description) {
+      const { warnings } = GitHubWatcher.sanitizeContent(ticket.description);
+      for (const w of warnings) {
+        this.logger.log(`⚠️  [sanitize] #${ticket.id}: ${w}`);
+      }
+    }
 
     const pipeline = new IssuePipeline({
       github: this.connector,
