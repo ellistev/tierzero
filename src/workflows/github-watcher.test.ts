@@ -20,6 +20,10 @@ class MockCodeAgent implements CodeAgent {
     this.fixCalls.push(failures);
     return { summary: "Mock fix", filesChanged: ["src/mock.ts"] };
   }
+
+  async fixReviewFindings(_instructions: string): Promise<CodeAgentResult> {
+    return { summary: "Mock review fix", filesChanged: ["src/mock.ts"] };
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -85,6 +85,28 @@ export class ClaudeCodeAgent implements CodeAgent {
     }
   }
 
+  async fixReviewFindings(instructions: string, workDir: string): Promise<CodeAgentResult> {
+    console.log(`[claude-code-agent] Fixing review findings...`);
+
+    const fixPath = join(workDir, "REVIEW_FIXES.md");
+    writeFileSync(fixPath, instructions, "utf-8");
+
+    const prompt = "Read REVIEW_FIXES.md. Fix all the issues listed. Run npm test to make sure nothing broke. Delete REVIEW_FIXES.md when done.";
+
+    let output = "";
+    try {
+      output = await this.runClaude(prompt, workDir);
+    } finally {
+      try { if (existsSync(fixPath)) unlinkSync(fixPath); } catch { /* ok */ }
+    }
+
+    const filesChanged = this.getChangedFiles(workDir);
+    return {
+      summary: `Claude Code review fix: ${filesChanged.length} files modified`,
+      filesChanged,
+    };
+  }
+
   async fixTests(failures: string, workDir: string): Promise<CodeAgentResult> {
     console.log(`[claude-code-agent] Fixing test failures...`);
 

@@ -57,6 +57,10 @@ class MockCodeAgent implements CodeAgent {
   async fixTests(_failures: string, _workDir: string): Promise<CodeAgentResult> {
     return { summary: "Fixed tests", filesChanged: [] };
   }
+
+  async fixReviewFindings(_instructions: string, _workDir: string): Promise<CodeAgentResult> {
+    return { summary: "Fixed review findings", filesChanged: [] };
+  }
 }
 
 // ── Mock GitOps (injected via subclass) ─────────────────────────────
