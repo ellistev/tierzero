@@ -1,0 +1,30 @@
+# Source (dist/ is the published artifact)
+src/
+test/
+demo/
+demos/
+skills/
+
+# Config & dev files
+.tierzero/
+.env
+.env.*
+.claude-prompt.txt
+tsconfig.json
+tsconfig.build.json
+TASK.md
+CLAUDE.md
+launch-watcher.cjs
+
+# Test files
+*.test.ts
+*.test.js
+
+# Git & CI
+.github/
+.gitignore
+
+# Misc
+venv/
+node_modules/
+config/

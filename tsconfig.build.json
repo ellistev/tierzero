@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "moduleDetection": "force",
+    "module": "Preserve",
+    "moduleResolution": "Bundler",
+    "target": "ES2022",
+    "strict": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "allowJs": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "dist"
+  },
+  "include": ["src/**/*"],
+  "exclude": [
+    "node_modules",
+    "venv",
+    "dist",
+    "src/infra/tests",
+    "src/infra/**/*.test.js",
+    "src/infra/**/*.test.ts",
+    "src/**/*.test.ts",
+    "test/**/*"
+  ]
+}
