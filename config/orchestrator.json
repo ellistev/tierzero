@@ -36,7 +36,7 @@
     "minScore": 70,
     "maxErrors": 0,
     "maxWarnings": 5,
-    "useLLM": false,
+    "useLLM": true,
     "rules": ["no-console-log", "no-todo", "test-coverage", "no-any", "file-size", "no-secrets"]
   },
   "scheduler": {
