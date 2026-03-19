@@ -38,7 +38,8 @@
     "live:sgi": "tsx demo/run-live.ts --demo sgi",
     "live:sgi:dry": "tsx demo/run-live.ts --demo sgi --dry-run",
     "live:sgi:gather": "tsx demo/run-live.ts --demo sgi --gather-only",
-    "test:e2e": "tsx --test test/e2e/run-e2e.ts",
+    "test:e2e": "tsx --test test/e2e/scenarios/scenario-1-happy-path.test.ts test/e2e/scenarios/scenario-2-test-fix-loop.test.ts test/e2e/scenarios/scenario-3-review-blocks.test.ts test/e2e/scenarios/scenario-4-agent-timeout.test.ts test/e2e/scenarios/scenario-5-deploy-rollback.test.ts test/e2e/scenarios/scenario-6-multi-issue.test.ts test/e2e/orchestrator-e2e.test.ts test/e2e/review-e2e.test.ts test/e2e/deploy-e2e.test.ts test/e2e/monitoring-e2e.test.ts test/e2e/scheduler-e2e.test.ts",
+    "test:e2e:browser": "tsx --test test/e2e/run-e2e.ts",
     "demo:ticket": "tsx demo/ticket-app/server.ts",
     "demo:recording": "tsx demo/run-recording-demo.ts",
     "security:check": "tsx src/security/pre-commit-check.ts"
