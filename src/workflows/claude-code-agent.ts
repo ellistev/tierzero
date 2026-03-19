@@ -15,6 +15,8 @@ import { execSync, spawn } from "node:child_process";
 import { writeFileSync, unlinkSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { CodeAgent, IssueContext, CodeAgentResult } from "./issue-pipeline";
+import type { KnowledgeStore, KnowledgeEntry } from "../knowledge/store";
+import type { KnowledgeExtractor, ExtractionContext } from "../knowledge/extractor";
 
 export interface ClaudeCodeAgentConfig {
   /** Path to claude CLI (default: auto-detect) */
@@ -23,40 +25,57 @@ export interface ClaudeCodeAgentConfig {
   timeoutMs?: number;
   /** Additional context to include in TASK.md */
   extraContext?: string;
+  /** Knowledge store for prior knowledge injection */
+  knowledgeStore?: KnowledgeStore;
+  /** Knowledge extractor for post-task learning */
+  knowledgeExtractor?: KnowledgeExtractor;
 }
 
 export class ClaudeCodeAgent implements CodeAgent {
   private readonly claudePath: string;
   private readonly timeoutMs: number;
   private readonly extraContext: string;
+  private readonly knowledgeStore: KnowledgeStore | null;
+  private readonly knowledgeExtractor: KnowledgeExtractor | null;
 
   constructor(config: ClaudeCodeAgentConfig = {}) {
     this.claudePath = config.claudePath ?? "claude";
     this.timeoutMs = config.timeoutMs ?? 600_000;
     this.extraContext = config.extraContext ?? "";
+    this.knowledgeStore = config.knowledgeStore ?? null;
+    this.knowledgeExtractor = config.knowledgeExtractor ?? null;
   }
 
   async solve(issue: IssueContext, workDir: string): Promise<CodeAgentResult> {
-    // 1. Write TASK.md
+    // 1. Search for prior knowledge
+    const priorKnowledge = await this.searchPriorKnowledge(issue);
+
+    // 2. Write TASK.md (with prior knowledge if available)
     const taskPath = join(workDir, "TASK.md");
-    const taskContent = this.buildTaskFile(issue);
+    const taskContent = this.buildTaskFile(issue, priorKnowledge);
     writeFileSync(taskPath, taskContent, "utf-8");
 
     try {
-      // 2. Run Claude Code
+      // 3. Run Claude Code
       console.log(`[claude-code-agent] Solving issue #${issue.number}: ${issue.title}`);
       console.log(`[claude-code-agent] TASK.md written (${taskContent.length} chars)`);
+      if (priorKnowledge.length > 0) {
+        console.log(`[claude-code-agent] Injected ${priorKnowledge.length} prior knowledge entries`);
+      }
 
       const prompt = "Read TASK.md. Implement everything described. Run tests and make sure they pass. Do NOT modify any existing test files unless the task specifically requires it. Delete TASK.md when done.";
 
       const output = await this.runClaude(prompt, workDir);
 
-      // 3. Get changed files from git
+      // 4. Get changed files from git
       const filesChanged = this.getChangedFiles(workDir);
       console.log(`[claude-code-agent] Files changed: ${filesChanged.length}`);
 
-      // 4. Extract summary from output (last meaningful paragraph)
+      // 5. Extract summary from output (last meaningful paragraph)
       const summary = this.extractSummary(output, issue);
+
+      // 6. Extract knowledge from completed work
+      await this.extractKnowledge(issue, output, filesChanged, workDir);
 
       return { summary, filesChanged };
 
@@ -183,7 +202,7 @@ export class ClaudeCodeAgent implements CodeAgent {
     });
   }
 
-  private buildTaskFile(issue: IssueContext): string {
+  private buildTaskFile(issue: IssueContext, priorKnowledge: KnowledgeEntry[] = []): string {
     const sections = [
       `# TASK: Issue #${issue.number} - ${issue.title}`,
       "",
@@ -204,6 +223,17 @@ export class ClaudeCodeAgent implements CodeAgent {
       sections.push("## Additional Context", this.extraContext, "");
     }
 
+    if (priorKnowledge.length > 0) {
+      sections.push("## Prior Knowledge", "");
+      for (const entry of priorKnowledge) {
+        sections.push(
+          `### ${entry.title} (confidence: ${entry.confidence.toFixed(2)}, used ${entry.usageCount} times)`,
+          entry.content,
+          ""
+        );
+      }
+    }
+
     sections.push(
       "## Rules",
       "- Follow existing code patterns and conventions",
@@ -217,6 +247,57 @@ export class ClaudeCodeAgent implements CodeAgent {
     );
 
     return sections.join("\n");
+  }
+
+  private async searchPriorKnowledge(issue: IssueContext): Promise<KnowledgeEntry[]> {
+    if (!this.knowledgeStore) return [];
+    try {
+      const query = `${issue.title} ${issue.description.slice(0, 500)}`;
+      const entries = await this.knowledgeStore.search(query, { limit: 5, minConfidence: 0.5 });
+      // Record usage for each entry returned
+      for (const entry of entries) {
+        await this.knowledgeStore.recordUsage(entry.id);
+      }
+      return entries;
+    } catch (err) {
+      console.error(`[claude-code-agent] Knowledge search failed: ${(err as Error).message}`);
+      return [];
+    }
+  }
+
+  private async extractKnowledge(
+    issue: IssueContext,
+    agentOutput: string,
+    filesChanged: string[],
+    workDir: string
+  ): Promise<void> {
+    if (!this.knowledgeExtractor || !this.knowledgeStore) return;
+    try {
+      let gitDiff = "";
+      try {
+        gitDiff = execSync("git diff", { cwd: workDir, encoding: "utf-8", stdio: "pipe" }).slice(0, 5000);
+      } catch { /* ok */ }
+
+      const context: ExtractionContext = {
+        taskId: `issue-${issue.number}`,
+        taskTitle: issue.title,
+        taskDescription: issue.description,
+        agentName: "claude-code",
+        gitDiff,
+        agentOutput: agentOutput.slice(-2000),
+        filesModified: filesChanged,
+      };
+
+      const entries = await this.knowledgeExtractor.extract(context);
+      for (const entry of entries) {
+        await this.knowledgeStore.add(entry);
+      }
+      if (entries.length > 0) {
+        console.log(`[claude-code-agent] Extracted ${entries.length} knowledge entries`);
+      }
+    } catch (err) {
+      console.error(`[claude-code-agent] Knowledge extraction failed: ${(err as Error).message}`);
+    }
   }
 
   private getChangedFiles(workDir: string): string[] {
