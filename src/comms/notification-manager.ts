@@ -6,7 +6,7 @@ import { NotificationSent, NotificationFailed, NotificationRuleTriggered } from 
 
 export interface NotificationRule {
   id: string;
-  trigger: 'task.completed' | 'task.failed' | 'task.escalated' | 'agent.hung' | 'health.degraded' | 'custom';
+  trigger: 'task.completed' | 'task.failed' | 'task.escalated' | 'agent.hung' | 'health.degraded' | 'pr.created' | 'custom';
   filter?: {
     category?: string;
     priority?: string;

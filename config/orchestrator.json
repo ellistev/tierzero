@@ -39,6 +39,26 @@
     "useLLM": true,
     "rules": ["no-console-log", "no-todo", "test-coverage", "no-any", "file-size", "no-secrets"]
   },
+  "notifications": {
+    "defaultChannels": ["slack", "email"],
+    "alertChannels": ["slack", "email", "discord"],
+    "email": {
+      "apiKey": "",
+      "from": "tierzero@yourdomain.com",
+      "to": ["team@company.com"]
+    },
+    "slack": {
+      "token": "",
+      "defaultChannel": "#tierzero-alerts"
+    },
+    "discord": {
+      "webhookUrl": ""
+    },
+    "webhook": {
+      "url": "http://localhost:3600/hooks/tierzero",
+      "headers": {}
+    }
+  },
   "scheduler": {
     "timezone": "America/Los_Angeles",
     "jobs": [

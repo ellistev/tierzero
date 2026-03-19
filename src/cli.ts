@@ -1092,9 +1092,9 @@ async function cmdOrchestrate(args: ParsedArgs) {
   // MetricsBridge: subscribe to EventBus and record all metrics
   const metricsBridge = new MetricsBridge(metrics, eventBus);
 
-  // Also forward supervisor and router events through the EventBus
-  supervisor.on("event", (event) => eventBus.emit("event", event));
-  router.on("event", (event) => eventBus.emit("event", event));
+  // Connect supervisor and router to the EventBus
+  eventBus.connectRouter(router);
+  eventBus.connectSupervisor(supervisor);
 
   metricsBridge.connect();
 
@@ -1104,8 +1104,81 @@ async function cmdOrchestrate(args: ParsedArgs) {
     alertEngine.addRule(rule);
   }
 
-  // NotificationManager for alert notifications
+  // NotificationManager: register channels, rules, and wire to event bus
+  const { EmailChannel } = await import("./comms/channels/email");
+  const { SlackChannel } = await import("./comms/channels/slack");
+  const { DiscordChannel } = await import("./comms/channels/discord");
+  const { WebhookChannel } = await import("./comms/channels/webhook");
+  const { TelegramChannel } = await import("./comms/channels/telegram");
+  const { NotificationStore } = await import("./read-models/notifications");
+  const { notificationsRouter } = await import("./infra/rest/notifications-router");
+
   const notifier = new NotificationManager();
+
+  // Register channels from config
+  if (config.notifications?.email) {
+    notifier.registerChannel(new EmailChannel(config.notifications.email));
+  }
+  if (config.notifications?.slack) {
+    notifier.registerChannel(new SlackChannel(config.notifications.slack));
+  }
+  if (config.notifications?.discord) {
+    notifier.registerChannel(new DiscordChannel(config.notifications.discord));
+  }
+  if (config.notifications?.webhook) {
+    notifier.registerChannel(new WebhookChannel(config.notifications.webhook));
+  }
+  if (config.notifications?.telegram) {
+    notifier.registerChannel(new TelegramChannel(config.notifications.telegram));
+  }
+
+  // Add default notification rules
+  notifier.addRule({
+    id: "task-completed",
+    trigger: "task.completed",
+    channels: config.notifications?.defaultChannels ?? ["webhook"],
+    template: "task-completed",
+    enabled: true,
+  });
+  notifier.addRule({
+    id: "task-failed",
+    trigger: "task.failed",
+    channels: config.notifications?.defaultChannels ?? ["webhook"],
+    template: "task-failed",
+    enabled: true,
+  });
+  notifier.addRule({
+    id: "task-escalated",
+    trigger: "task.escalated",
+    channels: config.notifications?.alertChannels ?? config.notifications?.defaultChannels ?? ["webhook"],
+    template: "task-escalated",
+    enabled: true,
+  });
+  notifier.addRule({
+    id: "agent-hung",
+    trigger: "agent.hung",
+    channels: config.notifications?.alertChannels ?? ["webhook"],
+    template: "agent-hung",
+    enabled: true,
+  });
+  notifier.addRule({
+    id: "pr-created",
+    trigger: "pr.created",
+    channels: config.notifications?.defaultChannels ?? ["webhook"],
+    template: "pr-created",
+    enabled: true,
+  });
+
+  // Subscribe NotificationManager to EventBus events
+  eventBus.subscribe("TaskCompleted", (data) => notifier.processEvent("task.completed", data));
+  eventBus.subscribe("TaskFailed", (data) => notifier.processEvent("task.failed", data));
+  eventBus.subscribe("TaskEscalated", (data) => notifier.processEvent("task.escalated", data));
+  eventBus.subscribe("AgentHung", (data) => notifier.processEvent("agent.hung", data));
+  eventBus.subscribe("PRCreated", (data) => notifier.processEvent("pr.created", data));
+
+  // Wire notification events to NotificationStore read model
+  const notifStore = new NotificationStore();
+  notifier.on("event", (event) => notifStore.apply(event));
 
   // Build component checkers from all subsystems
   const connectors: import("./connectors/connector").TicketConnector[] = [];
@@ -1180,6 +1253,9 @@ async function cmdOrchestrate(args: ParsedArgs) {
   // Mount deployments REST API
   app.use(deploymentsRouter({ store: deployStore }));
 
+  // Mount notifications REST API
+  app.use(notificationsRouter({ store: notifStore, manager: notifier }));
+
   const apiPort = config.apiPort ?? 3500;
   const schedulerJobCount = scheduler.listJobs().length;
 
@@ -1208,6 +1284,8 @@ async function cmdOrchestrate(args: ParsedArgs) {
     metricsBridge.disconnect();
     scheduler.stop();
     eventBus.disconnectScheduler();
+    eventBus.disconnectRouter();
+    eventBus.disconnectSupervisor();
     await supervisor.shutdown(10_000).catch(() => {});
     for (const adapter of adapters) {
       await adapter.stop().catch(() => {});

@@ -70,6 +70,8 @@ export interface PipelineConfig {
   onDeployComplete?: (result: DeployResult) => void;
   /** Callback when deploy fails */
   onDeployFailed?: (result: Partial<DeployResult>) => void;
+  /** Callback when PR is created - used by notification system */
+  onPRCreated?: (data: { issueNumber: number; prNumber: number; prUrl: string; title: string; testsRun: number; testsPassed: number }) => void;
 }
 
 export interface PipelineLogger {
@@ -405,6 +407,18 @@ export class IssuePipeline {
       result.prNumber = prResult.number;
       result.prUrl = prResult.url;
       result.status = testResult.passed ? "success" : "partial";
+
+      // After PR is created, emit event for notification system
+      if (this.config.onPRCreated) {
+        this.config.onPRCreated({
+          issueNumber,
+          prNumber: prResult.number,
+          prUrl: prResult.url,
+          title: ticket.title,
+          testsRun: result.testsRun,
+          testsPassed: result.testsPassed,
+        });
+      }
 
       const prEvents = aggregate.execute(
         new CreatePR(pipelineId, prResult.number, prResult.url, !testResult.passed, new Date().toISOString())
