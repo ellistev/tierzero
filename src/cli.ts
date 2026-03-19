@@ -19,6 +19,9 @@ import { GitHubWatcher } from "./workflows/github-watcher";
 import { spawnStreaming } from "./workflows/issue-pipeline";
 import type { CodeAgent, IssueContext, CodeAgentResult } from "./workflows/issue-pipeline";
 import { ClaudeCodeAgent } from "./workflows/claude-code-agent";
+import { createLogger } from "./infra/logger";
+
+const log = createLogger("cli");
 
 // ---------------------------------------------------------------------------
 // ANSI helpers -- minimal, no dependency
@@ -34,9 +37,9 @@ const c = {
   cyan:  (s: string) => isTTY ? `\x1b[36m${s}\x1b[0m` : s,
 };
 
-function hr() { console.log(c.dim("─".repeat(60))); }
+function hr() { log.info(c.dim("─".repeat(60))); }
 function die(msg: string): never {
-  console.error(c.red(`\nError: ${msg}\n`));
+  log.error(c.red(`\nError: ${msg}\n`));
   process.exit(1);
 }
 
@@ -99,7 +102,7 @@ function bool(flags: ParsedArgs["flags"], key: string): boolean {
 // ---------------------------------------------------------------------------
 
 function printHelp() {
-  console.log(`
+  log.info(`
 ${c.bold("operation-agent-steve")} -- AI ticket resolution agent
 
 ${c.bold("Commands:")}
@@ -264,38 +267,38 @@ async function cmdIndex(args: ParsedArgs) {
 
   if (statsOnly) {
     const stats = await indexer.stats();
-    console.log(`\n${c.bold("Index stats")}`);
+    log.info(`\n${c.bold("Index stats")}`);
     hr();
-    console.log(`Collection : ${c.cyan(collection)}`);
-    console.log(`Chroma URL : ${c.dim(chromaUrl)}`);
-    console.log(`Total chunks : ${c.bold(String(stats.totalChunks))}`);
-    console.log(`Sources      : ${stats.sources.length}`);
-    stats.sources.forEach(s => console.log(`  ${c.dim("·")} ${s}`));
-    console.log();
+    log.info(`Collection : ${c.cyan(collection)}`);
+    log.info(`Chroma URL : ${c.dim(chromaUrl)}`);
+    log.info(`Total chunks : ${c.bold(String(stats.totalChunks))}`);
+    log.info(`Sources      : ${stats.sources.length}`);
+    stats.sources.forEach(s => log.info(`  ${c.dim("·")} ${s}`));
+    log.info();
     return;
   }
 
-  console.log(`\n${c.bold("Indexing")} ${c.cyan(absDir)}`);
-  console.log(`Collection: ${c.cyan(collection)}  Chroma: ${c.dim(chromaUrl)}`);
-  if (force) console.log(c.yellow("  --force: re-indexing all files"));
+  log.info(`\n${c.bold("Indexing")} ${c.cyan(absDir)}`);
+  log.info(`Collection: ${c.cyan(collection)}  Chroma: ${c.dim(chromaUrl)}`);
+  if (force) log.info(c.yellow("  --force: re-indexing all files"));
   hr();
 
   const result = await indexer.index({ force });
 
   hr();
-  console.log(`\n${c.bold("Summary")}`);
-  console.log(`  Files processed : ${c.green(String(result.filesProcessed))}`);
-  console.log(`  Files skipped   : ${c.dim(String(result.filesSkipped))}  ${c.dim("(unchanged)")}`);
-  console.log(`  Chunks added    : ${c.green(String(result.chunksAdded))}`);
-  console.log(`  Chunks deleted  : ${c.dim(String(result.chunksDeleted))}  ${c.dim("(re-indexed files)")}`);
+  log.info(`\n${c.bold("Summary")}`);
+  log.info(`  Files processed : ${c.green(String(result.filesProcessed))}`);
+  log.info(`  Files skipped   : ${c.dim(String(result.filesSkipped))}  ${c.dim("(unchanged)")}`);
+  log.info(`  Chunks added    : ${c.green(String(result.chunksAdded))}`);
+  log.info(`  Chunks deleted  : ${c.dim(String(result.chunksDeleted))}  ${c.dim("(re-indexed files)")}`);
   if (result.errors.length) {
-    console.log(`  Errors          : ${c.red(String(result.errors.length))}`);
-    result.errors.forEach(e => console.log(`    ${c.red("·")} ${e.file}: ${e.error}`));
+    log.info(`  Errors          : ${c.red(String(result.errors.length))}`);
+    result.errors.forEach(e => log.info(`    ${c.red("·")} ${e.file}: ${e.error}`));
   } else {
-    console.log(`  Errors          : ${c.dim("0")}`);
+    log.info(`  Errors          : ${c.dim("0")}`);
   }
-  console.log(`  Duration        : ${c.dim((result.durationMs / 1000).toFixed(1) + "s")}`);
-  console.log();
+  log.info(`  Duration        : ${c.dim((result.durationMs / 1000).toFixed(1) + "s")}`);
+  log.info();
 }
 
 // ---------------------------------------------------------------------------
@@ -315,9 +318,9 @@ async function cmdSearch(args: ParsedArgs) {
 
   const retriever = new KnowledgeRetriever({ collectionName: collection, chromaUrl, k, scoreThreshold: threshold });
 
-  console.log(`\n${c.bold("Search")} ${c.cyan(`"${query}"`)}`);
-  console.log(`Collection: ${c.cyan(collection)}  k: ${k}  threshold: ${threshold}${mmr ? "  mode: MMR" : ""}`);
-  if (folder) console.log(`Folder filter: ${c.dim(folder)}`);
+  log.info(`\n${c.bold("Search")} ${c.cyan(`"${query}"`)}`);
+  log.info(`Collection: ${c.cyan(collection)}  k: ${k}  threshold: ${threshold}${mmr ? "  mode: MMR" : ""}`);
+  if (folder) log.info(`Folder filter: ${c.dim(folder)}`);
   hr();
 
   const result = await retriever.search(query, {
@@ -328,29 +331,29 @@ async function cmdSearch(args: ParsedArgs) {
   });
 
   if (result.chunks.length === 0) {
-    console.log(c.yellow("\nNo results above threshold. Try lowering --threshold or broadening the query.\n"));
+    log.info(c.yellow("\nNo results above threshold. Try lowering --threshold or broadening the query.\n"));
     return;
   }
 
-  console.log(`${c.dim(`Found ${result.totalReturned} of ${result.totalFound} results`)}\n`);
+  log.info(`${c.dim(`Found ${result.totalReturned} of ${result.totalFound} results`)}\n`);
 
   result.chunks.forEach((chunk, i) => {
     const scoreLabel = isNaN(chunk.score)
       ? c.yellow("MMR")
       : c.green(chunk.score.toFixed(3));
 
-    console.log(`${c.bold(`[${i + 1}]`)} ${c.cyan(chunk.source)}  ${c.dim("score:")} ${scoreLabel}`);
+    log.info(`${c.bold(`[${i + 1}]`)} ${c.cyan(chunk.source)}  ${c.dim("score:")} ${scoreLabel}`);
 
     // Print first ~4 lines of content, truncated to terminal width
     const lines = chunk.content.split("\n").filter(l => l.trim()).slice(0, 4);
     lines.forEach(line => {
       const truncated = line.length > 80 ? line.slice(0, 77) + "..." : line;
-      console.log(`    ${c.dim(truncated)}`);
+      log.info(`    ${c.dim(truncated)}`);
     });
-    if (i < result.chunks.length - 1) console.log();
+    if (i < result.chunks.length - 1) log.info();
   });
 
-  console.log();
+  log.info();
 }
 
 // ---------------------------------------------------------------------------
@@ -378,14 +381,14 @@ async function cmdRun(args: ParsedArgs) {
   const connector = new ServiceNowConnector({ instanceUrl, username, password, table });
   const retriever = new KnowledgeRetriever({ collectionName: collection, chromaUrl });
 
-  console.log(`\n${c.bold("Fetching ticket")} ${c.cyan(ticketId)} ${c.dim(`from ${instanceUrl}`)}`);
+  log.info(`\n${c.bold("Fetching ticket")} ${c.cyan(ticketId)} ${c.dim(`from ${instanceUrl}`)}`);
 
   const ticket = await connector.getTicket(ticketId);
 
-  console.log(`\n${c.bold(ticket.title)}`);
-  console.log(`${c.dim("Status:")} ${ticket.status}  ${c.dim("Priority:")} ${ticket.priority}  ${c.dim("Type:")} ${ticket.type}`);
-  console.log(`${c.dim("Reporter:")} ${ticket.reporter.name}${ticket.assignee ? `  ${c.dim("Assignee:")} ${ticket.assignee.name}` : ""}`);
-  if (ticket.url) console.log(`${c.dim("URL:")} ${ticket.url}`);
+  log.info(`\n${c.bold(ticket.title)}`);
+  log.info(`${c.dim("Status:")} ${ticket.status}  ${c.dim("Priority:")} ${ticket.priority}  ${c.dim("Type:")} ${ticket.type}`);
+  log.info(`${c.dim("Reporter:")} ${ticket.reporter.name}${ticket.assignee ? `  ${c.dim("Assignee:")} ${ticket.assignee.name}` : ""}`);
+  if (ticket.url) log.info(`${c.dim("URL:")} ${ticket.url}`);
   hr();
 
   const { codebases, codingModel } = buildCoderConfig(args.flags);
@@ -399,43 +402,43 @@ async function cmdRun(args: ParsedArgs) {
     codingModel: codingModel as any,
   });
 
-  if (dryRun) console.log(c.yellow("  --dry-run: actions will be logged but not executed\n"));
-  if (codebases.length) console.log(`${c.bold("Codebase:")} ${c.cyan(codebases[0].name)} (${codebases[0].path})  coding model: ${c.dim(codingModel?.modelName ?? "none")}`);
+  if (dryRun) log.info(c.yellow("  --dry-run: actions will be logged but not executed\n"));
+  if (codebases.length) log.info(`${c.bold("Codebase:")} ${c.cyan(codebases[0].name)} (${codebases[0].path})  coding model: ${c.dim(codingModel?.modelName ?? "none")}`);
 
-  console.log(`${c.bold("Running agent")}  model: ${c.dim(model)}  max-iterations: ${c.dim(String(maxIter))}\n`);
+  log.info(`${c.bold("Running agent")}  model: ${c.dim(model)}  max-iterations: ${c.dim(String(maxIter))}\n`);
 
   try {
     const finalState = await agent.run(ticket);
 
     hr();
-    console.log(`\n${c.bold("Result")}`);
-    console.log(`  Decision  : ${c.cyan(finalState.decision ?? "none")}`);
-    console.log(`  Confidence: ${finalState.confidence.toFixed(2)}`);
+    log.info(`\n${c.bold("Result")}`);
+    log.info(`  Decision  : ${c.cyan(finalState.decision ?? "none")}`);
+    log.info(`  Confidence: ${finalState.confidence.toFixed(2)}`);
     if (finalState.actionTaken) {
-      console.log(`  Action    : ${c.green(finalState.actionTaken.type)}`);
+      log.info(`  Action    : ${c.green(finalState.actionTaken.type)}`);
       if (finalState.actionTaken.type === "implemented") {
         const impl = finalState.actionTaken;
-        if (impl.branch) console.log(`  Branch    : ${c.cyan(impl.branch)}`);
-        if (impl.commitHash) console.log(`  Commit    : ${c.dim(impl.commitHash)}`);
-        if (impl.testsPassed !== undefined) console.log(`  Tests     : ${impl.testsPassed ? c.green("passed") : c.red("failed")}`);
+        if (impl.branch) log.info(`  Branch    : ${c.cyan(impl.branch)}`);
+        if (impl.commitHash) log.info(`  Commit    : ${c.dim(impl.commitHash)}`);
+        if (impl.testsPassed !== undefined) log.info(`  Tests     : ${impl.testsPassed ? c.green("passed") : c.red("failed")}`);
       }
     }
     if (finalState.error) {
-      console.log(`  Error     : ${c.red(finalState.error)}`);
+      log.info(`  Error     : ${c.red(finalState.error)}`);
     }
 
     if (finalState.steps.length) {
-      console.log(`\n${c.bold("Steps")}`);
+      log.info(`\n${c.bold("Steps")}`);
       finalState.steps.forEach((step, i) => {
-        console.log(`  ${c.dim(`${i + 1}.`)} ${c.bold(step.node)}  ${c.dim(step.summary)}`);
+        log.info(`  ${c.dim(`${i + 1}.`)} ${c.bold(step.node)}  ${c.dim(step.summary)}`);
       });
     }
-    console.log();
+    log.info();
   } catch (err) {
     // AgentGraph.run() throws until the StateGraph is wired -- show clearly
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(c.yellow(`\n  Agent not yet fully implemented: ${msg}\n`));
-    console.error(c.dim("  Wire up the LangGraph StateGraph in src/agent/agent.ts to proceed.\n"));
+    log.error(c.yellow(`\n  Agent not yet fully implemented: ${msg}\n`));
+    log.error(c.dim("  Wire up the LangGraph StateGraph in src/agent/agent.ts to proceed.\n"));
     process.exit(1);
   }
 }
@@ -474,40 +477,40 @@ async function cmdWatch(args: ParsedArgs) {
     agent,
     batchSize,
     onTicketStart: (ticket) => {
-      console.log(`\n  ${c.bold("→")} ${c.cyan(ticket.externalId ?? ticket.id)}  ${ticket.title}`);
+      log.info(`\n  ${c.bold("→")} ${c.cyan(ticket.externalId ?? ticket.id)}  ${ticket.title}`);
     },
     onTicketDone: (ticket, state) => {
       const action = state.actionTaken?.type ?? "no_action";
-      console.log(`    ${c.green("✓")} ${state.decision ?? "none"} (${state.confidence.toFixed(2)})  action: ${c.dim(action)}`);
+      log.info(`    ${c.green("✓")} ${state.decision ?? "none"} (${state.confidence.toFixed(2)})  action: ${c.dim(action)}`);
       totalProcessed++;
       if (maxTickets > 0 && totalProcessed >= maxTickets) {
-        console.log(c.yellow(`\nMax tickets (${maxTickets}) reached. Stopping.\n`));
+        log.info(c.yellow(`\nMax tickets (${maxTickets}) reached. Stopping.\n`));
         poller.stop();
         process.exit(0);
       }
     },
     onTicketError: (ticket, err) => {
-      console.error(`    ${c.red("✗")} ${ticket.externalId ?? ticket.id}: ${err}`);
+      log.error(`    ${c.red("✗")} ${ticket.externalId ?? ticket.id}: ${err}`);
     },
     onCycleDone: (result) => {
       if (result.ticketsFound === 0) {
-        console.log(c.dim(`  [${new Date().toLocaleTimeString()}] No new open tickets`));
+        log.info(c.dim(`  [${new Date().toLocaleTimeString()}] No new open tickets`));
       } else {
-        console.log(c.dim(`  [${new Date().toLocaleTimeString()}] Cycle done — processed ${result.ticketsProcessed}/${result.ticketsFound}, errors: ${result.errors.length}`));
+        log.info(c.dim(`  [${new Date().toLocaleTimeString()}] Cycle done — processed ${result.ticketsProcessed}/${result.ticketsFound}, errors: ${result.errors.length}`));
       }
     },
   });
 
   const intervalMs = intervalSec * 1000;
-  console.log(`\n${c.bold("Watching")} for open tickets  interval: ${c.dim(intervalSec + "s")}${batchSize ? `  batch: ${batchSize}` : ""}${maxTickets ? `  max: ${maxTickets}` : ""}${dryRun ? `  ${c.yellow("[dry-run]")}` : ""}`);
-  console.log(c.dim("Press Ctrl+C to stop.\n"));
+  log.info(`\n${c.bold("Watching")} for open tickets  interval: ${c.dim(intervalSec + "s")}${batchSize ? `  batch: ${batchSize}` : ""}${maxTickets ? `  max: ${maxTickets}` : ""}${dryRun ? `  ${c.yellow("[dry-run]")}` : ""}`);
+  log.info(c.dim("Press Ctrl+C to stop.\n"));
   hr();
 
   poller.start(intervalMs);
 
   process.on("SIGINT", () => {
     poller.stop();
-    console.log(`\n\nStopped. Processed ${totalProcessed} ticket(s) total.\n`);
+    log.info(`\n\nStopped. Processed ${totalProcessed} ticket(s) total.\n`);
     process.exit(0);
   });
 }
@@ -518,23 +521,23 @@ async function cmdWatch(args: ParsedArgs) {
 
 function printIngestResult(result: IngestResult, label: string) {
   hr();
-  console.log(`\n${c.bold(label)}`);
-  console.log(`  Imported  : ${c.green(String(result.imported))}`);
-  console.log(`  Skipped   : ${c.dim(String(result.skipped))}  ${c.dim("(unchanged)")}`);
+  log.info(`\n${c.bold(label)}`);
+  log.info(`  Imported  : ${c.green(String(result.imported))}`);
+  log.info(`  Skipped   : ${c.dim(String(result.skipped))}  ${c.dim("(unchanged)")}`);
   if (result.errors.length) {
-    console.log(`  Errors    : ${c.red(String(result.errors.length))}`);
-    result.errors.forEach((e) => console.log(`    ${c.red("·")} ${e.source}: ${e.error}`));
+    log.info(`  Errors    : ${c.red(String(result.errors.length))}`);
+    result.errors.forEach((e) => log.info(`    ${c.red("·")} ${e.source}: ${e.error}`));
   } else {
-    console.log(`  Errors    : ${c.dim("0")}`);
+    log.info(`  Errors    : ${c.dim("0")}`);
   }
-  console.log(`  Duration  : ${c.dim((result.durationMs / 1000).toFixed(1) + "s")}`);
+  log.info(`  Duration  : ${c.dim((result.durationMs / 1000).toFixed(1) + "s")}`);
   if (result.docs.length) {
-    console.log(`\n${c.bold("Files written:")}`);
+    log.info(`\n${c.bold("Files written:")}`);
     result.docs.forEach((d) =>
-      console.log(`  ${c.dim("·")} ${c.cyan(d.filename)}  ${c.dim(`(${d.wordCount} words)`)}`)
+      log.info(`  ${c.dim("·")} ${c.cyan(d.filename)}  ${c.dim(`(${d.wordCount} words)`)}`)
     );
   }
-  console.log();
+  log.info();
 }
 
 // ---------------------------------------------------------------------------
@@ -562,14 +565,14 @@ async function cmdImportWiki(args: ParsedArgs) {
     const cfg = { organization: org, project, token, wikiId, outputDir };
 
     if (mode === "wiki" || mode === "both") {
-      console.log(`\n${c.bold("Importing Azure DevOps Wiki")}  org: ${c.cyan(org)}  project: ${c.cyan(project)}`);
+      log.info(`\n${c.bold("Importing Azure DevOps Wiki")}  org: ${c.cyan(org)}  project: ${c.cyan(project)}`);
       const importer = new AzureDevOpsWikiImporter(cfg);
       const result = await importer.import();
       printIngestResult(result, "Wiki Import Summary");
     }
 
     if (mode === "workitems" || mode === "both") {
-      console.log(`\n${c.bold("Mining Azure DevOps Work Items")}  limit: ${c.dim(String(limit))}`);
+      log.info(`\n${c.bold("Mining Azure DevOps Work Items")}  limit: ${c.dim(String(limit))}`);
       const miner = new AzureDevOpsWorkItemMiner({ ...cfg, limit });
       const result = await miner.mine();
       printIngestResult(result, "Work Item Mining Summary");
@@ -586,7 +589,7 @@ async function cmdImportWiki(args: ParsedArgs) {
     if (!email)    die("Confluence email required. Pass --email or set CONFLUENCE_EMAIL.");
     if (!apiToken) die("Confluence API token required. Pass --api-token or set CONFLUENCE_API_TOKEN.");
 
-    console.log(`\n${c.bold("Importing Confluence")}  ${c.cyan(baseUrl)}${spaceKeys.length ? `  spaces: ${spaceKeys.join(", ")}` : "  (all spaces)"}`);
+    log.info(`\n${c.bold("Importing Confluence")}  ${c.cyan(baseUrl)}${spaceKeys.length ? `  spaces: ${spaceKeys.join(", ")}` : "  (all spaces)"}`);
     const importer = new ConfluenceImporter({ baseUrl, email, apiToken, spaceKeys, outputDir });
     const result = await importer.import();
     printIngestResult(result, "Confluence Import Summary");
@@ -650,7 +653,7 @@ async function cmdMineTickets(args: ParsedArgs) {
     die(`Unknown --connector "${connectorName}". Use "servicenow", "jira", "gitlab", or "freshdesk".`);
   }
 
-  console.log(`\n${c.bold("Mining tickets")}  connector: ${c.cyan(connectorName)}  limit: ${c.dim(String(limit))}  min-comments: ${c.dim(String(minComments))}${since ? `  since: ${since.toISOString()}` : ""}`);
+  log.info(`\n${c.bold("Mining tickets")}  connector: ${c.cyan(connectorName)}  limit: ${c.dim(String(limit))}  min-comments: ${c.dim(String(minComments))}${since ? `  since: ${since.toISOString()}` : ""}`);
 
   const miner = new TicketMiner(connector, { outputDir, limit, minComments, since });
   const result = await miner.mine();
@@ -669,8 +672,8 @@ async function cmdImportUrl(args: ParsedArgs) {
   const ignoreRobots  = bool(args.flags, "ignore-robots");
   const timeoutMs     = num(args.flags, "timeout", 15_000);
 
-  console.log(`\n${c.bold("Scraping URLs")}  count: ${c.cyan(String(urls.length))}${ignoreRobots ? c.yellow("  --ignore-robots") : ""}`);
-  urls.forEach((u) => console.log(`  ${c.dim("·")} ${u}`));
+  log.info(`\n${c.bold("Scraping URLs")}  count: ${c.cyan(String(urls.length))}${ignoreRobots ? c.yellow("  --ignore-robots") : ""}`);
+  urls.forEach((u) => log.info(`  ${c.dim("·")} ${u}`));
 
   const scraper = new UrlScraper({ outputDir, respectRobots: !ignoreRobots, timeoutMs });
   const result = await scraper.scrape(urls);
@@ -717,15 +720,15 @@ async function cmdWatchGitHub(args: ParsedArgs) {
     const autoMerge = bool(args.flags, "auto-merge");
     const mergeMethod = str(args.flags, "merge-method", "squash") as "merge" | "squash" | "rebase";
 
-    console.log(`\n${c.bold("TierZero GitHub Watcher")} ${c.cyan("(Claude Code agent)")}`);
-    console.log(`  ${c.dim("repo:")} ${owner}/${repo}`);
-    console.log(`  ${c.dim("label:")} ${label}`);
-    console.log(`  ${c.dim("interval:")} ${interval}s`);
-    console.log(`  ${c.dim("workdir:")} ${workDir}`);
-    console.log(`  ${c.dim("agent:")} Claude Code CLI`);
-    console.log(`  ${c.dim("timeout:")} ${claudeTimeout}s per issue`);
-    if (autoMerge) console.log(`  ${c.dim("auto-merge:")} ${c.green("enabled")} (${mergeMethod})`);
-    if (assignTo) console.log(`  ${c.dim("assign:")} ${assignTo}`);
+    log.info(`\n${c.bold("TierZero GitHub Watcher")} ${c.cyan("(Claude Code agent)")}`);
+    log.info(`  ${c.dim("repo:")} ${owner}/${repo}`);
+    log.info(`  ${c.dim("label:")} ${label}`);
+    log.info(`  ${c.dim("interval:")} ${interval}s`);
+    log.info(`  ${c.dim("workdir:")} ${workDir}`);
+    log.info(`  ${c.dim("agent:")} Claude Code CLI`);
+    log.info(`  ${c.dim("timeout:")} ${claudeTimeout}s per issue`);
+    if (autoMerge) log.info(`  ${c.dim("auto-merge:")} ${c.green("enabled")} (${mergeMethod})`);
+    if (assignTo) log.info(`  ${c.dim("assign:")} ${assignTo}`);
     hr();
 
     const watcher = new GitHubWatcher({
@@ -743,7 +746,7 @@ async function cmdWatchGitHub(args: ParsedArgs) {
     });
 
     const shutdown = () => {
-      console.log(c.yellow("\nShutting down..."));
+      log.info(c.yellow("\nShutting down..."));
       watcher.stop();
       process.exit(0);
     };
@@ -762,7 +765,7 @@ async function cmdWatchGitHub(args: ParsedArgs) {
   let { codebases, codingModel } = buildCoderConfig(args.flags);
   
   if (!codingModel || codebases.length === 0) {
-    console.log(c.yellow("No --coding-model specified. Defaulting to OpenRouter (claude-3.7-sonnet-20250219)..."));
+    log.info(c.yellow("No --coding-model specified. Defaulting to OpenRouter (claude-3.7-sonnet-20250219)..."));
     // Default to the native implementer with Sonnet 3.7
     codingModel = createCodingModel({ provider: "openrouter" as any, model: "anthropic/claude-3.7-sonnet" });
     codebases = [{
@@ -780,7 +783,7 @@ async function cmdWatchGitHub(args: ParsedArgs) {
       const { Implementer } = await import("./coder/implementer");
       const implementer = new Implementer(codebases[0], codingModel);
       
-      console.log(c.dim(`\n── Implementer (${codingModel.modelName}) (solve #${issue.number}) ──`));
+      log.info(c.dim(`\n── Implementer (${codingModel.modelName}) (solve #${issue.number}) ──`));
       
       // Adapt IssueContext to Ticket interface for Implementer
       const dummyTicket: any = {
@@ -800,7 +803,7 @@ async function cmdWatchGitHub(args: ParsedArgs) {
 
       const result = await implementer.implement(dummyTicket);
       
-      console.log(c.dim(`── end Implementer (${result.success ? "success" : "failed"}) ──\n`));
+      log.info(c.dim(`── end Implementer (${result.success ? "success" : "failed"}) ──\n`));
 
       return {
         summary: result.summary + (result.error ? `\n\nError: ${result.error}` : ""),
@@ -816,12 +819,12 @@ async function cmdWatchGitHub(args: ParsedArgs) {
     },
   };
 
-  console.log(`\n${c.bold("TierZero GitHub Watcher")}`);
-  console.log(`  ${c.dim("repo:")} ${owner}/${repo}`);
-  console.log(`  ${c.dim("label:")} ${label}`);
-  console.log(`  ${c.dim("interval:")} ${interval}s`);
-  console.log(`  ${c.dim("workdir:")} ${workDir}`);
-  if (assignTo) console.log(`  ${c.dim("assign:")} ${assignTo}`);
+  log.info(`\n${c.bold("TierZero GitHub Watcher")}`);
+  log.info(`  ${c.dim("repo:")} ${owner}/${repo}`);
+  log.info(`  ${c.dim("label:")} ${label}`);
+  log.info(`  ${c.dim("interval:")} ${interval}s`);
+  log.info(`  ${c.dim("workdir:")} ${workDir}`);
+  if (assignTo) log.info(`  ${c.dim("assign:")} ${assignTo}`);
   hr();
 
   const watcher = new GitHubWatcher({
@@ -838,7 +841,7 @@ async function cmdWatchGitHub(args: ParsedArgs) {
 
   // Graceful shutdown
   const shutdown = () => {
-    console.log(c.yellow("\nShutting down..."));
+    log.info(c.yellow("\nShutting down..."));
     watcher.stop();
     process.exit(0);
   };
@@ -1129,27 +1132,27 @@ async function cmdOrchestrate(args: ParsedArgs) {
   const apiPort = config.apiPort ?? 3500;
   const schedulerJobCount = scheduler.listJobs().length;
 
-  console.log(`\n${c.bold("TierZero Orchestrator")}`);
-  console.log(`  ${c.dim("agents:")} ${Object.keys(agentConfigs).join(", ") || "none"}`);
-  console.log(`  ${c.dim("adapters:")} ${adapters.map(a => a.name).join(", ") || "none"}`);
-  console.log(`  ${c.dim("scheduler:")} ${schedulerJobCount} jobs registered`);
-  console.log(`  ${c.dim("API:")} http://localhost:${apiPort}`);
+  log.info(`\n${c.bold("TierZero Orchestrator")}`);
+  log.info(`  ${c.dim("agents:")} ${Object.keys(agentConfigs).join(", ") || "none"}`);
+  log.info(`  ${c.dim("adapters:")} ${adapters.map(a => a.name).join(", ") || "none"}`);
+  log.info(`  ${c.dim("scheduler:")} ${schedulerJobCount} jobs registered`);
+  log.info(`  ${c.dim("API:")} http://localhost:${apiPort}`);
   hr();
 
   const server = app.listen(apiPort, () => {
-    console.log(`REST API listening on port ${apiPort}`);
+    log.info(`REST API listening on port ${apiPort}`);
   });
 
   // Start all adapters
   for (const adapter of adapters) {
     await adapter.start();
-    console.log(`Adapter "${adapter.name}" started`);
+    log.info(`Adapter "${adapter.name}" started`);
   }
 
-  console.log(c.dim("\nPress Ctrl+C to stop.\n"));
+  log.info(c.dim("\nPress Ctrl+C to stop.\n"));
 
   const shutdown = async () => {
-    console.log(c.yellow("\nShutting down..."));
+    log.info(c.yellow("\nShutting down..."));
     healthAggregator.stop();
     metricsBridge.disconnect();
     scheduler.stop();
@@ -1191,18 +1194,18 @@ async function main() {
 
 // Global error handlers to prevent silent crashes
 process.on("unhandledRejection", (err) => {
-  console.error(`\n[UNHANDLED REJECTION] ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
+  log.error(`\n[UNHANDLED REJECTION] ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
 });
 process.on("uncaughtException", (err) => {
-  console.error(`\n[UNCAUGHT EXCEPTION] ${err.stack ?? err.message}\n`);
+  log.error(`\n[UNCAUGHT EXCEPTION] ${err.stack ?? err.message}\n`);
 });
 process.on("exit", (code) => {
   if (code !== 0) {
-    console.error(`[PROCESS EXIT] code=${code}`);
+    log.error(`[PROCESS EXIT] code=${code}`);
   }
 });
 
 main().catch(err => {
-  console.error(c.red(`\nFatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`));
+  log.error(c.red(`\nFatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`));
   process.exit(1);
 });

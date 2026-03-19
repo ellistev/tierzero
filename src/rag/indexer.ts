@@ -10,6 +10,9 @@ import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf";
 import type { Document } from "@langchain/core/documents";
 import type { Where } from "chromadb";
 import { htmlToMarkdown } from "../ingest/types.js";
+import { createLogger } from "../infra/logger";
+
+const log = createLogger("indexer");
 
 // ---------------------------------------------------------------------------
 // Types
@@ -334,9 +337,9 @@ export class KnowledgeIndexer {
         result.filesProcessed++;
         result.chunksAdded += chunks.length;
 
-        console.log(`  [+] ${relPath} -> ${chunks.length} chunks`);
+        log.info(`${relPath} -> ${chunks.length} chunks`);
       } catch (err) {
-        console.error(`  [!] ${relPath}: ${err}`);
+        log.error(`${relPath}: ${err}`);
         result.errors.push({ file: relPath, error: String(err) });
       }
     }
@@ -357,7 +360,7 @@ export class KnowledgeIndexer {
       await collection.delete({ ids: existing.ids });
     }
     await fs.rm(this.statePath(), { force: true });
-    console.log(`Cleared collection "${this.config.collectionName}" (${existing.ids.length} chunks removed)`);
+    log.info(`Cleared collection "${this.config.collectionName}" (${existing.ids.length} chunks removed)`);
   }
 
   /** Summary of what's currently in the index */

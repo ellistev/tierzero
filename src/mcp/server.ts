@@ -11,6 +11,8 @@
  */
 
 import type { SkillLoader } from "../skills/loader";
+import { createLogger } from "../infra/logger";
+const log = createLogger("mcp-server");
 
 export interface McpServerOptions {
   port?: number;
@@ -35,10 +37,7 @@ export class McpServer {
       (sum, s) => sum + s.provider.listCapabilities().length, 0
     );
 
-    console.log(
-      `[MCP Server] Would expose ${totalTools} tools from ${skills.length} skills ` +
-      `(${this.opts.transport} transport, not yet implemented)`
-    );
+    log.info(`Would expose ${totalTools} tools from ${skills.length} skills (${this.opts.transport} transport, not yet implemented)`);
 
     // TODO: Implement MCP server protocol
     // - Build tool schemas from skill manifests

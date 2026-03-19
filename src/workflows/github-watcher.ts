@@ -9,6 +9,7 @@ import { GitHubConnector, type GitHubConfig } from "../connectors/github";
 import { IssuePipeline, type PipelineConfig, type PipelineResult, type CodeAgent } from "./issue-pipeline";
 import { PRCreator } from "./pr-creator";
 import type { Ticket } from "../connectors/types";
+import { createLogger } from "../infra/logger";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -69,9 +70,10 @@ export interface WatcherState {
 // Watcher
 // ---------------------------------------------------------------------------
 
+const _watcherLog = createLogger("watcher");
 const defaultLogger: WatcherLogger = {
-  log: (msg: string) => console.log(`[watcher] ${msg}`),
-  error: (msg: string) => console.error(`[watcher] ${msg}`),
+  log: (msg: string) => _watcherLog.info(msg),
+  error: (msg: string) => _watcherLog.error(msg),
 };
 
 export class GitHubWatcher {

@@ -4,6 +4,7 @@ import { TaskAggregate } from "../domain/task/TaskAggregate";
 import { SubmitTask, AssignTask, StartTask, CompleteTask, FailTask, EscalateTask, RetryTask } from "../domain/task/commands";
 import type { TaskEvent } from "../domain/task/events";
 import { AgentRegistry, type TaskSource, type NormalizedTask, type TaskResult } from "./agent-registry";
+import { createLogger } from "../infra/logger";
 
 export interface TaskRouterConfig {
   registry: AgentRegistry;
@@ -11,9 +12,10 @@ export interface TaskRouterConfig {
   logger?: { log: (msg: string) => void; error: (msg: string) => void };
 }
 
+const _taskRouterLog = createLogger("task-router");
 const defaultLogger = {
-  log: (msg: string) => console.log(`[task-router] ${msg}`),
-  error: (msg: string) => console.error(`[task-router] ${msg}`),
+  log: (msg: string) => _taskRouterLog.info(msg),
+  error: (msg: string) => _taskRouterLog.error(msg),
 };
 
 /**

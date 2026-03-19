@@ -8,6 +8,8 @@
 import fs from "fs";
 import path from "path";
 import type { SkillManifest, SkillProvider, SkillConfig, SkillFactory } from "./types";
+import { createLogger } from "../infra/logger";
+const _skillLog = createLogger("skills");
 
 export interface LoadedSkill {
   manifest: SkillManifest;
@@ -37,9 +39,9 @@ export class SkillLoader {
   constructor(opts: SkillLoaderOptions) {
     this.opts = opts;
     this.log = opts.logger ?? {
-      log: console.log,
-      warn: console.warn,
-      error: console.error,
+      log: (msg: string) => _skillLog.info(msg),
+      warn: (msg: string) => _skillLog.warn(msg),
+      error: (msg: string) => _skillLog.error(msg),
     };
   }
 

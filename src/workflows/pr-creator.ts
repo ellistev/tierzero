@@ -3,6 +3,9 @@
  * Uses GitHub REST API to create PRs and link them to issues.
  */
 
+import { createLogger } from "../infra/logger";
+const log = createLogger("pr-creator");
+
 export interface CreatePROptions {
   /** PR title */
   title: string;
@@ -75,7 +78,7 @@ export class PRCreator {
           throw err;
         }
         // Otherwise it's likely a network/fetch error, wait and retry
-        console.warn(`[PRCreator] Fetch failed on attempt ${attempt}/3: ${err instanceof Error ? err.message : String(err)}. Retrying in 2s...`);
+        log.warn(`Fetch failed on attempt ${attempt}/3: ${err instanceof Error ? err.message : String(err)}. Retrying in 2s...`);
         if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 2000));
       }
     }

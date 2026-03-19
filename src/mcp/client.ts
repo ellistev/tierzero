@@ -12,6 +12,9 @@
  * - Handle streaming responses
  */
 
+import { createLogger } from "../infra/logger";
+const log = createLogger("mcp-client");
+
 export interface McpServerConfig {
   name: string;
   url: string;
@@ -45,7 +48,7 @@ export class McpClient {
   async connect(): Promise<void> {
     // TODO: Implement MCP protocol connection
     // For each server: handshake, list tools, cache schemas
-    console.log(`[MCP] ${this.servers.size} server(s) configured (connection not yet implemented)`);
+    log.info(`${this.servers.size} server(s) configured (connection not yet implemented)`);
   }
 
   /**
