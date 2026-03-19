@@ -851,7 +851,11 @@ async function cmdOrchestrate(args: ParsedArgs) {
   const { taskRouterApi } = await import("./infra/rest/task-router-api");
   const { GitHubAdapter } = await import("./orchestrator/adapters/github-adapter");
   const { WebhookAdapter } = await import("./orchestrator/adapters/webhook-adapter");
-  const { ScheduleAdapter } = await import("./orchestrator/adapters/schedule-adapter");
+  const { Scheduler } = await import("./scheduler/scheduler");
+  const { builtInJobs } = await import("./scheduler/jobs/index");
+  const { ScheduledJobStore } = await import("./read-models/scheduled-jobs");
+  const { schedulerRouter } = await import("./infra/rest/scheduler-router");
+  const { EventBus } = await import("./infra/event-bus");
   const express = await import("express");
   const fs = await import("fs");
 
@@ -958,21 +962,57 @@ async function cmdOrchestrate(args: ParsedArgs) {
     adapters.push(adapter);
   }
 
-  if (adapterConfigs.schedule && Array.isArray(adapterConfigs.schedule)) {
-    const schedules = adapterConfigs.schedule.map((s: any) => ({
-      id: s.id,
-      cron: s.cron,
-      taskTemplate: s.task ?? {},
-      enabled: s.enabled !== false,
-    }));
-    const adapter = new ScheduleAdapter(schedules);
-    adapter.onTask = (source) => {
-      const payload = source.payload as any;
-      const tmpl = payload?.template ?? {};
-      router.submit(source, tmpl.title ?? "Scheduled task", tmpl.description ?? "", tmpl.category ?? "monitoring");
-    };
-    adapters.push(adapter);
+  // --- Scheduler: replace static ScheduleAdapter with real Scheduler ---
+  const scheduler = new Scheduler();
+
+  // Register built-in jobs
+  for (const job of builtInJobs) {
+    scheduler.addJob(job);
   }
+
+  // Register custom jobs from config
+  for (const jobConfig of config.scheduler?.jobs ?? []) {
+    scheduler.addJob({
+      id: jobConfig.id,
+      name: jobConfig.name ?? jobConfig.id,
+      description: jobConfig.description ?? "",
+      schedule: jobConfig.schedule,
+      timezone: jobConfig.timezone ?? config.scheduler?.timezone ?? "UTC",
+      taskTemplate: {
+        title: jobConfig.taskTemplate?.title ?? jobConfig.id,
+        description: jobConfig.taskTemplate?.description ?? "",
+        category: jobConfig.taskTemplate?.category ?? "monitoring",
+        priority: jobConfig.taskTemplate?.priority ?? "normal",
+        agentType: jobConfig.taskTemplate?.agentType,
+      },
+      enabled: jobConfig.enabled !== false,
+      maxConcurrent: jobConfig.maxConcurrent ?? 1,
+      catchUp: jobConfig.catchUp ?? false,
+      maxConsecutiveFailures: jobConfig.maxConsecutiveFailures ?? 5,
+    });
+  }
+
+  // When a job triggers, submit it as a task to the router
+  scheduler.onTrigger = async (job) => {
+    const source = {
+      type: "schedule" as const,
+      id: `schedule-${job.id}-${Date.now()}`,
+      payload: job,
+      receivedAt: new Date().toISOString(),
+      priority: job.taskTemplate.priority,
+    };
+    router.submit(source, job.taskTemplate.title, job.taskTemplate.description ?? "", job.taskTemplate.category ?? "monitoring");
+  };
+
+  // Wire Scheduler events to ScheduledJobStore read model
+  const schedulerStore = new ScheduledJobStore();
+  scheduler.on("event", (event) => schedulerStore.apply(event));
+
+  // Connect Scheduler to EventBus
+  const eventBus = new EventBus();
+  eventBus.connectScheduler(scheduler);
+
+  scheduler.start();
 
   // Start REST API
   const app = express.default();
@@ -983,11 +1023,16 @@ async function cmdOrchestrate(args: ParsedArgs) {
   const { supervisorRouter } = await import("./infra/rest/supervisor-router");
   app.use(supervisorRouter({ store: agentStore, supervisor }));
 
+  // Mount scheduler REST API
+  app.use(schedulerRouter({ store: schedulerStore, scheduler }));
+
   const apiPort = config.apiPort ?? 3500;
+  const schedulerJobCount = scheduler.listJobs().length;
 
   console.log(`\n${c.bold("TierZero Orchestrator")}`);
   console.log(`  ${c.dim("agents:")} ${Object.keys(agentConfigs).join(", ") || "none"}`);
   console.log(`  ${c.dim("adapters:")} ${adapters.map(a => a.name).join(", ") || "none"}`);
+  console.log(`  ${c.dim("scheduler:")} ${schedulerJobCount} jobs registered`);
   console.log(`  ${c.dim("API:")} http://localhost:${apiPort}`);
   hr();
 
@@ -1005,6 +1050,8 @@ async function cmdOrchestrate(args: ParsedArgs) {
 
   const shutdown = async () => {
     console.log(c.yellow("\nShutting down..."));
+    scheduler.stop();
+    eventBus.disconnectScheduler();
     await supervisor.shutdown(10_000).catch(() => {});
     for (const adapter of adapters) {
       await adapter.stop().catch(() => {});

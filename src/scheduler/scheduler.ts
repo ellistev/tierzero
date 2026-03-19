@@ -1,4 +1,14 @@
+import { randomUUID } from "crypto";
+import { EventEmitter } from "events";
 import { nextRun, matches } from "./cron";
+import {
+  JobRegistered,
+  JobTriggered,
+  JobRunCompleted,
+  JobRunFailed,
+  JobDisabled,
+  JobEnabled,
+} from "../domain/scheduled-job/events";
 
 export interface ScheduledJob {
   id: string;
@@ -26,11 +36,12 @@ export interface ScheduledJob {
 
 export type JobInput = Omit<ScheduledJob, "lastRunAt" | "nextRunAt" | "runCount" | "failCount" | "consecutiveFailures">;
 
-export class Scheduler {
+export class Scheduler extends EventEmitter {
   private jobs = new Map<string, ScheduledJob>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
   private activeRuns = new Map<string, number>();
+  private runIds = new Map<string, string>();
 
   onTrigger: (job: ScheduledJob) => Promise<void> = async () => {};
 
@@ -50,6 +61,13 @@ export class Scheduler {
     }
     this.jobs.set(job.id, job);
     this.activeRuns.set(job.id, 0);
+
+    this.emit("event", new JobRegistered(
+      job.id, job.name, job.schedule, { ...job.taskTemplate },
+      job.description, job.timezone ?? "UTC", job.enabled,
+      job.maxConcurrent, job.catchUp, job.maxConsecutiveFailures,
+      new Date().toISOString()
+    ));
   }
 
   removeJob(jobId: string): void {
@@ -65,6 +83,7 @@ export class Scheduler {
     try {
       job.nextRunAt = nextRun(job.schedule).toISOString();
     } catch { /* invalid cron */ }
+    this.emit("event", new JobEnabled(job.id, new Date().toISOString()));
   }
 
   disableJob(jobId: string): void {
@@ -72,6 +91,7 @@ export class Scheduler {
     if (!job) return;
     job.enabled = false;
     job.nextRunAt = null;
+    this.emit("event", new JobDisabled(job.id, "manually disabled", new Date().toISOString()));
   }
 
   start(): void {
@@ -103,18 +123,26 @@ export class Scheduler {
     await this.fireJob(job);
   }
 
+  /** Get the current run ID for a job (set during fireJob) */
+  getRunId(jobId: string): string | undefined {
+    return this.runIds.get(jobId);
+  }
+
   /** Record that a job run completed successfully */
-  recordSuccess(jobId: string): void {
+  recordSuccess(jobId: string, runId?: string): void {
     const job = this.jobs.get(jobId);
     if (!job) return;
     job.runCount++;
     job.consecutiveFailures = 0;
     const active = this.activeRuns.get(jobId) ?? 0;
     this.activeRuns.set(jobId, Math.max(0, active - 1));
+
+    const rid = runId ?? this.runIds.get(jobId) ?? randomUUID();
+    this.emit("event", new JobRunCompleted(jobId, rid, null, new Date().toISOString()));
   }
 
   /** Record that a job run failed */
-  recordFailure(jobId: string): void {
+  recordFailure(jobId: string, error?: string, runId?: string): void {
     const job = this.jobs.get(jobId);
     if (!job) return;
     job.runCount++;
@@ -123,9 +151,13 @@ export class Scheduler {
     const active = this.activeRuns.get(jobId) ?? 0;
     this.activeRuns.set(jobId, Math.max(0, active - 1));
 
+    const rid = runId ?? this.runIds.get(jobId) ?? randomUUID();
+    this.emit("event", new JobRunFailed(jobId, rid, error ?? "unknown", new Date().toISOString()));
+
     if (job.consecutiveFailures >= job.maxConsecutiveFailures) {
       job.enabled = false;
       job.nextRunAt = null;
+      this.emit("event", new JobDisabled(jobId, `auto-disabled after ${job.consecutiveFailures} consecutive failures`, new Date().toISOString()));
     }
   }
 
@@ -150,6 +182,12 @@ export class Scheduler {
     const active = this.activeRuns.get(job.id) ?? 0;
     this.activeRuns.set(job.id, active + 1);
     job.lastRunAt = new Date().toISOString();
+
+    const runId = randomUUID();
+    this.runIds.set(job.id, runId);
+
+    // Emit triggered event
+    this.emit("event", new JobTriggered(job.id, job.lastRunAt, runId));
 
     // Recalculate next run
     try {
