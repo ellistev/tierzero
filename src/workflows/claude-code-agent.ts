@@ -96,17 +96,30 @@ export class ClaudeCodeAgent implements CodeAgent {
    */
   private runClaude(prompt: string, workDir: string): Promise<string> {
     return new Promise((resolve, reject) => {
+      // Write prompt to a temp file to avoid shell escaping issues entirely
+      const promptPath = join(workDir, ".claude-prompt.txt");
+      writeFileSync(promptPath, prompt, "utf-8");
+
       const args = [
         "--permission-mode", "bypassPermissions",
         "--print",
         prompt,
       ];
 
-      const child = spawn(this.claudePath, args, {
+      // Resolve full path to claude binary to avoid shell lookup issues
+      let claudeExe = this.claudePath;
+      try {
+        claudeExe = execSync(`where.exe ${this.claudePath}`, { encoding: "utf-8" }).trim().split("\n")[0].trim();
+      } catch {
+        // Fall back to configured path
+      }
+      console.log(`[claude-code-agent] Spawning: ${claudeExe} (shell: false, cwd: ${workDir})`);
+
+      const child = spawn(claudeExe, args, {
         cwd: workDir,
         stdio: ["ignore", "pipe", "pipe"],
         env: { ...process.env, FORCE_COLOR: "0" },
-        shell: true,
+        shell: false,
       });
 
       const chunks: string[] = [];
@@ -136,6 +149,9 @@ export class ClaudeCodeAgent implements CodeAgent {
         const output = chunks.join("");
         const stderr = stderrChunks.join("");
 
+        // Clean up prompt file
+        try { if (existsSync(promptPath)) unlinkSync(promptPath); } catch { /* ok */ }
+
         if (code !== 0) {
           console.log(`[claude-code-agent] Exit code: ${code}`);
           if (stderr) {
@@ -143,6 +159,7 @@ export class ClaudeCodeAgent implements CodeAgent {
           }
         }
 
+        console.log(`[claude-code-agent] Claude Code finished (exit ${code}), output length: ${output.length}`);
         // Always resolve - Claude Code may exit non-zero but still produce changes
         resolve(output);
       });
