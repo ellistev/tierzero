@@ -707,6 +707,9 @@ async function cmdWatchGitHub(args: ParsedArgs) {
       timeoutMs: claudeTimeout * 1000,
     });
 
+    const autoMerge = bool(args.flags, "auto-merge");
+    const mergeMethod = str(args.flags, "merge-method", "squash") as "merge" | "squash" | "rebase";
+
     console.log(`\n${c.bold("TierZero GitHub Watcher")} ${c.cyan("(Claude Code agent)")}`);
     console.log(`  ${c.dim("repo:")} ${owner}/${repo}`);
     console.log(`  ${c.dim("label:")} ${label}`);
@@ -714,6 +717,7 @@ async function cmdWatchGitHub(args: ParsedArgs) {
     console.log(`  ${c.dim("workdir:")} ${workDir}`);
     console.log(`  ${c.dim("agent:")} Claude Code CLI`);
     console.log(`  ${c.dim("timeout:")} ${claudeTimeout}s per issue`);
+    if (autoMerge) console.log(`  ${c.dim("auto-merge:")} ${c.green("enabled")} (${mergeMethod})`);
     if (assignTo) console.log(`  ${c.dim("assign:")} ${assignTo}`);
     hr();
 
@@ -725,6 +729,8 @@ async function cmdWatchGitHub(args: ParsedArgs) {
       assignTo,
       codeAgent,
       testCommand: testCmd,
+      autoMerge,
+      mergeMethod,
     });
 
     const shutdown = () => {

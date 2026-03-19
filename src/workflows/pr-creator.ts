@@ -108,6 +108,16 @@ export class PRCreator {
     };
   }
 
+  /** Merge a pull request */
+  async mergePR(prNumber: number, method: "merge" | "squash" | "rebase" = "squash"): Promise<void> {
+    await this.request(`/repos/${this.owner}/${this.repo}/pulls/${prNumber}/merge`, {
+      method: "PUT",
+      body: JSON.stringify({
+        merge_method: method,
+      }),
+    });
+  }
+
   /** Generate a PR body from issue context and changes */
   static buildPRBody(opts: {
     issueNumber: number;

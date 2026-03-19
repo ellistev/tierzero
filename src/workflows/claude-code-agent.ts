@@ -11,7 +11,7 @@
  * 4. Return summary + changed files
  */
 
-import { execSync } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import { writeFileSync, unlinkSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { CodeAgent, IssueContext, CodeAgentResult } from "./issue-pipeline";
@@ -49,27 +49,7 @@ export class ClaudeCodeAgent implements CodeAgent {
 
       const prompt = "Read TASK.md. Implement everything described. Run tests and make sure they pass. Do NOT modify any existing test files unless the task specifically requires it. Delete TASK.md when done.";
 
-      let output = "";
-      try {
-        output = execSync(
-          `${this.claudePath} --permission-mode bypassPermissions --print "${prompt.replace(/"/g, '\\"')}"`,
-          {
-            cwd: workDir,
-            encoding: "utf-8",
-            stdio: "pipe",
-            timeout: this.timeoutMs,
-            env: { ...process.env, FORCE_COLOR: "0" },
-          }
-        );
-      } catch (err: unknown) {
-        // Claude Code may exit non-zero but still produce changes
-        const execErr = err as { stdout?: string; stderr?: string; status?: number };
-        output = execErr.stdout ?? "";
-        if (execErr.stderr) {
-          console.error(`[claude-code-agent] stderr: ${execErr.stderr.slice(0, 500)}`);
-        }
-        console.log(`[claude-code-agent] Exit code: ${execErr.status}`);
-      }
+      const output = await this.runClaude(prompt, workDir);
 
       // 3. Get changed files from git
       const filesChanged = this.getChangedFiles(workDir);
@@ -89,23 +69,17 @@ export class ClaudeCodeAgent implements CodeAgent {
   async fixTests(failures: string, workDir: string): Promise<CodeAgentResult> {
     console.log(`[claude-code-agent] Fixing test failures...`);
 
-    const prompt = `Fix these test failures. Do NOT change the test expectations - fix the source code to make the tests pass:\n\n${failures.slice(0, 3000)}`;
+    // Write failures to a temp file to avoid shell escaping issues
+    const failPath = join(workDir, "TEST_FAILURES.md");
+    writeFileSync(failPath, `# Test Failures\n\nFix these test failures. Do NOT change the test expectations - fix the source code to make the tests pass:\n\n\`\`\`\n${failures.slice(0, 3000)}\n\`\`\``, "utf-8");
+
+    const prompt = "Read TEST_FAILURES.md. Fix the source code to make tests pass. Do NOT change test expectations. Run npm test to verify. Delete TEST_FAILURES.md when done.";
 
     let output = "";
     try {
-      output = execSync(
-        `${this.claudePath} --permission-mode bypassPermissions --print "${prompt.replace(/"/g, '\\"')}"`,
-        {
-          cwd: workDir,
-          encoding: "utf-8",
-          stdio: "pipe",
-          timeout: this.timeoutMs,
-          env: { ...process.env, FORCE_COLOR: "0" },
-        }
-      );
-    } catch (err: unknown) {
-      const execErr = err as { stdout?: string };
-      output = execErr.stdout ?? "";
+      output = await this.runClaude(prompt, workDir);
+    } finally {
+      try { if (existsSync(failPath)) unlinkSync(failPath); } catch { /* ok */ }
     }
 
     const filesChanged = this.getChangedFiles(workDir);
@@ -113,6 +87,72 @@ export class ClaudeCodeAgent implements CodeAgent {
       summary: `Claude Code fix attempt: ${filesChanged.length} files modified`,
       filesChanged,
     };
+  }
+
+  /**
+   * Run Claude Code CLI asynchronously using spawn (not execSync).
+   * execSync blocks the event loop and can crash the parent process
+   * on non-zero exit codes in some environments.
+   */
+  private runClaude(prompt: string, workDir: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const args = [
+        "--permission-mode", "bypassPermissions",
+        "--print",
+        prompt,
+      ];
+
+      const child = spawn(this.claudePath, args, {
+        cwd: workDir,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, FORCE_COLOR: "0" },
+        shell: true,
+      });
+
+      const chunks: string[] = [];
+      const stderrChunks: string[] = [];
+
+      child.stdout.on("data", (buf: Buffer) => {
+        const text = buf.toString();
+        chunks.push(text);
+        // Stream output in real-time
+        process.stdout.write(text);
+      });
+
+      child.stderr.on("data", (buf: Buffer) => {
+        stderrChunks.push(buf.toString());
+      });
+
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        const output = chunks.join("");
+        console.error(`[claude-code-agent] Timed out after ${this.timeoutMs}ms`);
+        // Resolve with whatever output we got - agent may have made changes
+        resolve(output);
+      }, this.timeoutMs);
+
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        const output = chunks.join("");
+        const stderr = stderrChunks.join("");
+
+        if (code !== 0) {
+          console.log(`[claude-code-agent] Exit code: ${code}`);
+          if (stderr) {
+            console.error(`[claude-code-agent] stderr: ${stderr.slice(0, 500)}`);
+          }
+        }
+
+        // Always resolve - Claude Code may exit non-zero but still produce changes
+        resolve(output);
+      });
+
+      child.on("error", (err) => {
+        clearTimeout(timer);
+        console.error(`[claude-code-agent] Spawn error: ${err.message}`);
+        resolve(""); // Don't reject - let pipeline continue and check git diff
+      });
+    });
   }
 
   private buildTaskFile(issue: IssueContext): string {

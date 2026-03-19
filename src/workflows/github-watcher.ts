@@ -37,6 +37,10 @@ export interface WatcherConfig {
   codeAgent: CodeAgent;
   /** Logger */
   logger?: WatcherLogger;
+  /** Auto-merge PRs when tests pass (default: false) */
+  autoMerge?: boolean;
+  /** Merge method (default: "squash") */
+  mergeMethod?: "merge" | "squash" | "rebase";
 }
 
 export interface WatcherLogger {
@@ -94,12 +98,21 @@ export class GitHubWatcher {
     const interval = this.config.pollIntervalMs ?? 60_000;
     this.logger.log(`Watching ${this.config.github.owner}/${this.config.github.repo} every ${interval / 1000}s`);
     this.logger.log(`Trigger label: "${this.config.triggerLabel ?? "tierzero-agent"}"`);
+    if (this.config.autoMerge) {
+      this.logger.log(`Auto-merge: enabled (${this.config.mergeMethod ?? "squash"})`);
+    }
 
     // Run immediately, then on interval
-    this.poll().catch((err) => this.logger.error(`Poll error: ${err}`));
-    this.timer = setInterval(() => {
-      this.poll().catch((err) => this.logger.error(`Poll error: ${err}`));
-    }, interval);
+    // Use an async wrapper to keep the process alive even if poll throws
+    const safePoll = async () => {
+      try {
+        await this.poll();
+      } catch (err) {
+        this.logger.error(`Poll error: ${err}`);
+      }
+    };
+    safePoll();
+    this.timer = setInterval(safePoll, interval);
   }
 
   /** Stop polling */
@@ -196,6 +209,8 @@ export class GitHubWatcher {
       codeAgent: this.config.codeAgent,
       testCommand: this.config.testCommand,
       logger: this.logger,
+      autoMerge: this.config.autoMerge,
+      mergeMethod: this.config.mergeMethod,
     });
 
     try {

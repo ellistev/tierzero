@@ -41,6 +41,10 @@ export interface PipelineConfig {
   logger?: PipelineLogger;
   /** Event store for pipeline audit trail */
   eventStore?: IEventStore;
+  /** Auto-merge PRs when tests pass (default: false) */
+  autoMerge?: boolean;
+  /** Merge method (default: "squash") */
+  mergeMethod?: "merge" | "squash" | "rebase";
 }
 
 export interface PipelineLogger {
@@ -380,11 +384,26 @@ export class IssuePipeline {
       );
       await this.emitEvents(streamId, aggregate, completeEvents);
 
-      // 8. Update issue
+      // 8. Auto-merge if enabled and tests pass
+      if (this.config.autoMerge && testResult.passed && prResult.number) {
+        this.logger.log(`Auto-merging PR #${prResult.number}...`);
+        try {
+          await this.pr.mergePR(prResult.number, this.config.mergeMethod ?? "squash");
+          this.logger.log(`PR #${prResult.number} merged successfully`);
+
+          // Pull latest main after merge
+          this.git.resetToMain();
+        } catch (mergeErr) {
+          this.logger.error(`Auto-merge failed: ${mergeErr instanceof Error ? mergeErr.message : String(mergeErr)}`);
+        }
+      }
+
+      // 9. Update issue
       const statusEmoji = testResult.passed ? "✅" : "⚠️";
+      const mergeStatus = this.config.autoMerge && testResult.passed ? " (auto-merged)" : "";
       await this.config.github.addComment(
         ticket.id,
-        `${statusEmoji} PR created: ${prResult.url}\n\nTests: ${result.testsPassed}/${result.testsRun} passing\n\n${result.summary}`
+        `${statusEmoji} PR created: ${prResult.url}${mergeStatus}\n\nTests: ${result.testsPassed}/${result.testsRun} passing\n\n${result.summary}`
       );
 
       if (this.config.prCreatedLabel) {
