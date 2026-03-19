@@ -1,4 +1,28 @@
 {
+  "deploy": {
+    "staging": {
+      "strategy": "direct",
+      "host": "staging.example.com",
+      "user": "deploy",
+      "keyPath": "~/.ssh/deploy_key",
+      "remotePath": "/opt/myapp",
+      "pm2AppName": "myapp-staging",
+      "healthCheckUrl": "https://staging.example.com/health",
+      "healthCheckTimeoutMs": 30000,
+      "rollbackOnFailure": true
+    },
+    "production": {
+      "strategy": "direct",
+      "host": "prod.example.com",
+      "user": "deploy",
+      "keyPath": "~/.ssh/deploy_key",
+      "remotePath": "/opt/myapp",
+      "pm2AppName": "myapp",
+      "healthCheckUrl": "https://example.com/health",
+      "healthCheckTimeoutMs": 60000,
+      "rollbackOnFailure": true
+    }
+  },
   "prReview": {
     "enabled": true,
     "minScore": 70,

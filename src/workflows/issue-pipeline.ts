@@ -16,7 +16,7 @@ import type { Ticket } from "../connectors/types";
 import { IssuePipelineAggregate } from "../domain/issue-pipeline/IssuePipelineAggregate";
 import { StartPipeline, CompleteAgentWork, RecordTestRun, RecordTestFix, CreatePR, CompletePipeline, FailPipeline } from "../domain/issue-pipeline/commands";
 import type { IEventStore, ESEventData } from "../infra/interfaces";
-import type { Deployer, DeployConfig } from "../deploy/deployer";
+import type { Deployer, DeployConfig, DeployResult } from "../deploy/deployer";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -64,6 +64,10 @@ export interface PipelineConfig {
   autoDeploy?: AutoDeployConfig;
   /** Deployer instance for auto-deploy */
   deployer?: Deployer;
+  /** Callback when deploy completes successfully */
+  onDeployComplete?: (result: DeployResult) => void;
+  /** Callback when deploy fails */
+  onDeployFailed?: (result: Partial<DeployResult>) => void;
 }
 
 export interface PipelineLogger {
@@ -453,22 +457,26 @@ export class IssuePipeline {
       if (this.config.autoDeploy?.enabled && this.config.deployer && this.config.autoMerge && testResult.passed) {
         this.logger.log(`Auto-deploying to ${this.config.autoDeploy.environment}...`);
         try {
+          const deployVersion = this.git.getHeadSha?.() ?? branch;
           const deployResult = await this.config.deployer.deploy({
             environment: this.config.autoDeploy.environment,
-            version: branch,
+            version: deployVersion,
             config: this.config.autoDeploy.deployConfig,
           });
           if (deployResult.success) {
-            this.logger.log(`Deploy to ${this.config.autoDeploy.environment} succeeded`);
+            this.logger.log(`Deploy to ${this.config.autoDeploy.environment} succeeded (${deployResult.durationMs}ms)`);
             (result as PipelineResult & { deployResult?: unknown }).deployResult = deployResult;
+            this.config.onDeployComplete?.(deployResult);
           } else {
             this.logger.error(`Deploy failed: ${deployResult.error}`);
             if (deployResult.rolledBack) {
-              this.logger.log("Deployment was rolled back automatically");
+              this.logger.log(`Deploy failed, rolled back to previous version`);
             }
+            this.config.onDeployFailed?.(deployResult);
           }
         } catch (deployErr) {
           this.logger.error(`Auto-deploy failed: ${deployErr instanceof Error ? deployErr.message : String(deployErr)}`);
+          this.config.onDeployFailed?.({ error: String(deployErr) });
         }
       }
 

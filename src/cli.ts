@@ -1075,6 +1075,29 @@ async function cmdOrchestrate(args: ParsedArgs) {
     }
   });
 
+  // --- Deployment: wire deploy events to read model + notifications ---
+  const { DeploymentStore } = await import("./read-models/deployments");
+  const { deploymentsRouter } = await import("./infra/rest/deployments-router");
+  const deployStore = new DeploymentStore();
+
+  eventBus.on("event", (event) => {
+    const typeName = event?.constructor?.type;
+    if (typeName === "DeployInitiated" || typeName === "DeploySucceeded" ||
+        typeName === "DeployFailed" || typeName === "RollbackInitiated" ||
+        typeName === "RollbackCompleted") {
+      deployStore.apply(event);
+    }
+    if (typeName === "DeploySucceeded") {
+      notifier.processEvent("deploy.success", event);
+    }
+    if (typeName === "DeployFailed") {
+      notifier.processEvent("deploy.failed", event);
+    }
+    if (typeName === "RollbackCompleted") {
+      notifier.processEvent("deploy.rollback", event);
+    }
+  });
+
   // Start REST API
   const app = express.default();
   app.use(express.default.json());
@@ -1089,6 +1112,9 @@ async function cmdOrchestrate(args: ParsedArgs) {
 
   // Mount monitoring dashboard API
   app.use(dashboardRouter({ healthAggregator, alertEngine, metrics }));
+
+  // Mount deployments REST API
+  app.use(deploymentsRouter({ store: deployStore }));
 
   const apiPort = config.apiPort ?? 3500;
   const schedulerJobCount = scheduler.listJobs().length;
