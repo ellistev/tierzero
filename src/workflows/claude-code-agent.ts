@@ -120,7 +120,11 @@ export class ClaudeCodeAgent implements CodeAgent {
         stdio: ["ignore", "pipe", "pipe"],
         env: { ...process.env, FORCE_COLOR: "0" },
         shell: false,
+        detached: true,
+        windowsHide: true,
       });
+
+      console.log(`[claude-code-agent] Child spawned, pid: ${child.pid}`);
 
       const chunks: string[] = [];
       const stderrChunks: string[] = [];

@@ -860,7 +860,20 @@ async function main() {
   }
 }
 
+// Global error handlers to prevent silent crashes
+process.on("unhandledRejection", (err) => {
+  console.error(`\n[UNHANDLED REJECTION] ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
+});
+process.on("uncaughtException", (err) => {
+  console.error(`\n[UNCAUGHT EXCEPTION] ${err.stack ?? err.message}\n`);
+});
+process.on("exit", (code) => {
+  if (code !== 0) {
+    console.error(`[PROCESS EXIT] code=${code}`);
+  }
+});
+
 main().catch(err => {
-  console.error(c.red(`\nFatal: ${err instanceof Error ? err.message : String(err)}\n`));
+  console.error(c.red(`\nFatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`));
   process.exit(1);
 });
