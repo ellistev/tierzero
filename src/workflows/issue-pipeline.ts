@@ -18,6 +18,7 @@ import { IssuePipelineAggregate } from "../domain/issue-pipeline/IssuePipelineAg
 import { StartPipeline, CompleteAgentWork, RecordTestRun, RecordTestFix, CreatePR, CompletePipeline, FailPipeline } from "../domain/issue-pipeline/commands";
 import type { IEventStore, ESEventData } from "../infra/interfaces";
 import type { Deployer, DeployConfig, DeployResult } from "../deploy/deployer";
+import { createLogger } from "../infra/logger";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -231,9 +232,10 @@ export function spawnStreaming(
 // Pipeline
 // ---------------------------------------------------------------------------
 
+const _pipelineLog = createLogger("pipeline");
 const defaultLogger: PipelineLogger = {
-  log: (msg: string) => console.log(`[pipeline] ${msg}`),
-  error: (msg: string) => console.error(`[pipeline] ${msg}`),
+  log: (msg: string) => _pipelineLog.info(msg),
+  error: (msg: string) => _pipelineLog.error(msg),
 };
 
 export class IssuePipeline {

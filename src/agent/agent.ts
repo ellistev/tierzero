@@ -20,6 +20,8 @@ import type { TicketConnector } from "../connectors/connector";
 import type { RetrievedChunk } from "../rag/retriever";
 import type { CodebaseConfig, CodingModel, ImplementationResult } from "../coder/types";
 import { Implementer, formatResultForTicket } from "../coder/implementer";
+import { createLogger } from "../infra/logger";
+const log = createLogger("agent");
 
 // ---------------------------------------------------------------------------
 // Decision + Action types
@@ -636,7 +638,7 @@ export class AgentGraph {
       const { ticket, decision, draftedReply, reasoning } = state;
 
       if (dryRun) {
-        console.log(`  [dry-run] ${decision}: "${draftedReply.slice(0, 120)}"`);
+        log.info(`[dry-run] ${decision}: "${draftedReply.slice(0, 120)}"`);
         return {
           actionTaken: { type: "no_action", reason: `dry-run: would ${decision}` },
           steps: [{ node: "act", summary: `dry-run: ${decision}`, timestamp: now() }],
@@ -798,10 +800,10 @@ export class AgentGraph {
         try {
           await deps.connector.addComment(state.ticket.id, auditNote, { isInternal: true });
         } catch (err) {
-          console.warn(`  [record] Audit note failed (non-fatal): ${err}`);
+          log.warn(`Audit note failed (non-fatal): ${err}`);
         }
       } else {
-        console.log(`\n  [dry-run] Audit note:\n${auditNote.split("\n").map(l => "    " + l).join("\n")}`);
+        log.info(`[dry-run] Audit note:\n${auditNote.split("\n").map(l => "    " + l).join("\n")}`);
       }
 
       return {

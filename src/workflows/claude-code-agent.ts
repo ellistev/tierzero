@@ -17,6 +17,9 @@ import { join } from "node:path";
 import type { CodeAgent, IssueContext, CodeAgentResult } from "./issue-pipeline";
 import type { KnowledgeStore, KnowledgeEntry } from "../knowledge/store";
 import type { KnowledgeExtractor, ExtractionContext } from "../knowledge/extractor";
+import { createLogger } from "../infra/logger";
+
+const log = createLogger("claude-code-agent");
 
 export interface ClaudeCodeAgentConfig {
   /** Path to claude CLI (default: auto-detect) */
@@ -57,10 +60,10 @@ export class ClaudeCodeAgent implements CodeAgent {
 
     try {
       // 3. Run Claude Code
-      console.log(`[claude-code-agent] Solving issue #${issue.number}: ${issue.title}`);
-      console.log(`[claude-code-agent] TASK.md written (${taskContent.length} chars)`);
+      log.info(`Solving issue #${issue.number}: ${issue.title}`);
+      log.info(`TASK.md written (${taskContent.length} chars)`);
       if (priorKnowledge.length > 0) {
-        console.log(`[claude-code-agent] Injected ${priorKnowledge.length} prior knowledge entries`);
+        log.info(`Injected ${priorKnowledge.length} prior knowledge entries`);
       }
 
       const prompt = "Read TASK.md. Implement everything described. Run tests and make sure they pass. Do NOT modify any existing test files unless the task specifically requires it. Delete TASK.md when done.";
@@ -69,7 +72,7 @@ export class ClaudeCodeAgent implements CodeAgent {
 
       // 4. Get changed files from git
       const filesChanged = this.getChangedFiles(workDir);
-      console.log(`[claude-code-agent] Files changed: ${filesChanged.length}`);
+      log.info(`Files changed: ${filesChanged.length}`);
 
       // 5. Extract summary from output (last meaningful paragraph)
       const summary = this.extractSummary(output, issue);
@@ -86,7 +89,7 @@ export class ClaudeCodeAgent implements CodeAgent {
   }
 
   async fixReviewFindings(instructions: string, workDir: string): Promise<CodeAgentResult> {
-    console.log(`[claude-code-agent] Fixing review findings...`);
+    log.info(`Fixing review findings...`);
 
     const fixPath = join(workDir, "REVIEW_FIXES.md");
     writeFileSync(fixPath, instructions, "utf-8");
@@ -108,7 +111,7 @@ export class ClaudeCodeAgent implements CodeAgent {
   }
 
   async fixTests(failures: string, workDir: string): Promise<CodeAgentResult> {
-    console.log(`[claude-code-agent] Fixing test failures...`);
+    log.info(`Fixing test failures...`);
 
     // Write failures to a temp file to avoid shell escaping issues
     const failPath = join(workDir, "TEST_FAILURES.md");
@@ -154,7 +157,7 @@ export class ClaudeCodeAgent implements CodeAgent {
       } catch {
         // Fall back to configured path
       }
-      console.log(`[claude-code-agent] Spawning: ${claudeExe} (shell: false, cwd: ${workDir})`);
+      log.info(`Spawning: ${claudeExe} (shell: false, cwd: ${workDir})`);
 
       const child = spawn(claudeExe, args, {
         cwd: workDir,
@@ -165,7 +168,7 @@ export class ClaudeCodeAgent implements CodeAgent {
         windowsHide: true,
       });
 
-      console.log(`[claude-code-agent] Child spawned, pid: ${child.pid}`);
+      log.info(`Child spawned, pid: ${child.pid}`);
 
       const chunks: string[] = [];
       const stderrChunks: string[] = [];
@@ -182,7 +185,7 @@ export class ClaudeCodeAgent implements CodeAgent {
       });
 
       const timer = setTimeout(() => {
-        console.error(`[claude-code-agent] Timed out after ${this.timeoutMs}ms, killing pid ${child.pid}`);
+        log.error(`Timed out after ${this.timeoutMs}ms, killing pid ${child.pid}`);
         // On Windows, child.kill() doesn't work for detached processes
         // Use taskkill to kill the entire process tree
         try {
@@ -205,20 +208,20 @@ export class ClaudeCodeAgent implements CodeAgent {
         try { if (existsSync(promptPath)) unlinkSync(promptPath); } catch { /* ok */ }
 
         if (code !== 0) {
-          console.log(`[claude-code-agent] Exit code: ${code}`);
+          log.info(`Exit code: ${code}`);
           if (stderr) {
-            console.error(`[claude-code-agent] stderr: ${stderr.slice(0, 500)}`);
+            log.error(`stderr: ${stderr.slice(0, 500)}`);
           }
         }
 
-        console.log(`[claude-code-agent] Claude Code finished (exit ${code}), output length: ${output.length}`);
+        log.info(`Claude Code finished (exit ${code}), output length: ${output.length}`);
         // Always resolve - Claude Code may exit non-zero but still produce changes
         resolve(output);
       });
 
       child.on("error", (err) => {
         clearTimeout(timer);
-        console.error(`[claude-code-agent] Spawn error: ${err.message}`);
+        log.error(`Spawn error: ${err.message}`);
         resolve(""); // Don't reject - let pipeline continue and check git diff
       });
     });
@@ -282,7 +285,7 @@ export class ClaudeCodeAgent implements CodeAgent {
       }
       return entries;
     } catch (err) {
-      console.error(`[claude-code-agent] Knowledge search failed: ${(err as Error).message}`);
+      log.error(`Knowledge search failed: ${(err as Error).message}`);
       return [];
     }
   }
@@ -315,10 +318,10 @@ export class ClaudeCodeAgent implements CodeAgent {
         await this.knowledgeStore.add(entry);
       }
       if (entries.length > 0) {
-        console.log(`[claude-code-agent] Extracted ${entries.length} knowledge entries`);
+        log.info(`Extracted ${entries.length} knowledge entries`);
       }
     } catch (err) {
-      console.error(`[claude-code-agent] Knowledge extraction failed: ${(err as Error).message}`);
+      log.error(`Knowledge extraction failed: ${(err as Error).message}`);
     }
   }
 

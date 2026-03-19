@@ -9,6 +9,8 @@
  */
 
 import type { Ticket, WorkflowExecutor, WorkflowDecision } from "./types";
+import { createLogger } from "../infra/logger";
+const log = createLogger("registry");
 
 export interface RegistryMatch {
   executor: WorkflowExecutor;
@@ -107,7 +109,7 @@ export class WorkflowRegistry {
           }
         }
       } catch (err) {
-        console.warn(`Failed to load workflow ${entry.name}: ${err instanceof Error ? err.message : String(err)}`);
+        log.warn(`Failed to load workflow ${entry.name}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 

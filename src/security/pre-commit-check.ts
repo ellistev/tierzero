@@ -8,6 +8,8 @@
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { scanFile, type ScanFinding } from "./secret-scanner.js";
+import { createLogger } from "../infra/logger";
+const log = createLogger("security");
 
 export function getStagedFiles(): string[] {
   try {
@@ -51,16 +53,14 @@ if (process.argv[1] && process.argv[1].includes("pre-commit-check")) {
   const { findings, passed } = checkStagedFiles();
 
   if (!passed) {
-    console.error("\n=== SECRET CHECK FAILED ===\n");
+    log.error("=== SECRET CHECK FAILED ===");
     for (const f of findings) {
-      console.error(`  ${f.file}:${f.line} - ${f.pattern}: ${f.match}`);
+      log.error(`${f.file}:${f.line} - ${f.pattern}: ${f.match}`);
     }
-    console.error(
-      "\nSecrets detected in staged files. Remove them before committing.\n",
-    );
+    log.error("Secrets detected in staged files. Remove them before committing.");
     process.exit(1);
   }
 
-  console.log("Security check passed - no secrets found in staged files.");
+  log.info("Security check passed - no secrets found in staged files.");
   process.exit(0);
 }
