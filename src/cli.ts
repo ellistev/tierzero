@@ -695,6 +695,12 @@ async function cmdWatchGitHub(args: ParsedArgs) {
 
   if (!token) die("--token or GITHUB_TOKEN env var required");
 
+  // Trusted author security config
+  const trustedAuthorsRaw = typeof args.flags["trusted-authors"] === "string" ? args.flags["trusted-authors"] : undefined;
+  const trustedAuthors = trustedAuthorsRaw ? trustedAuthorsRaw.split(",").map((s: string) => s.trim()) : undefined;
+  const unsafeAllowAll = bool(args.flags, "unsafe-allow-all-authors");
+  const requireTrustedAuthor = unsafeAllowAll ? false : undefined; // undefined = default (true)
+
   // Check for --agent claude-code flag
   const agentType = str(args.flags, "agent", "native");
 
@@ -732,6 +738,8 @@ async function cmdWatchGitHub(args: ParsedArgs) {
       testCommand: testCmd,
       autoMerge,
       mergeMethod,
+      trustedAuthors,
+      requireTrustedAuthor,
     });
 
     const shutdown = () => {
@@ -824,6 +832,8 @@ async function cmdWatchGitHub(args: ParsedArgs) {
     assignTo,
     codeAgent,
     testCommand: testCmd,
+    trustedAuthors,
+    requireTrustedAuthor,
   });
 
   // Graceful shutdown

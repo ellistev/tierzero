@@ -1,4 +1,12 @@
 {
+  "adapters": {
+    "github": {
+      "owner": "ellistev",
+      "repo": "tierzero",
+      "trustedAuthors": ["ellistev"],
+      "requireTrustedAuthor": true
+    }
+  },
   "deploy": {
     "staging": {
       "strategy": "direct",
