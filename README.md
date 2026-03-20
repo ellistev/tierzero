@@ -58,7 +58,7 @@ npx tsx src/cli.ts watch-github \
   --merge-method squash
 ```
 
-Label a GitHub issue with `tierzero-agent` and the watcher picks it up, writes the code, opens a PR, reviews it, and merges.
+Label a GitHub issue with `tierzero-agent` and the watcher picks it up, writes the code, opens a PR, reviews it, and merges. Issues are processed in priority order. Add a `priority-N` label (lower N = higher priority). Issues without priority labels are processed last, sorted by issue number.
 
 ---
 
