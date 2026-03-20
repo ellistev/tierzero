@@ -187,6 +187,14 @@ export class GitHubWatcher {
 
     if (candidates.length === 0) return [];
 
+    // Sort by priority label (lowest first), then by issue number ascending
+    candidates.sort((a, b) => {
+      const aPri = GitHubWatcher.getPriority(a);
+      const bPri = GitHubWatcher.getPriority(b);
+      if (aPri !== bPri) return aPri - bPri;
+      return parseInt(a.id) - parseInt(b.id);
+    });
+
     // Respect concurrency limit
     const slotsAvailable = maxConcurrent - this.state.activeIssues.size;
     if (slotsAvailable <= 0) {
@@ -222,6 +230,16 @@ export class GitHubWatcher {
   }
 
   /**
+   * Extract priority from a ticket's labels.
+   * Looks for `priority-N` labels; returns N or 999 if none found.
+   */
+  static getPriority(ticket: Ticket): number {
+    const label = ticket.tags?.find((t) => /^priority-(\d+)$/.test(t));
+    if (!label) return 999;
+    return parseInt(label.match(/^priority-(\d+)$/)![1], 10);
+  }
+
+  /**
    * Sanitize issue content: detect suspicious shell injection patterns.
    * Returns { sanitized, warnings } where warnings lists any suspicious patterns found.
    */
@@ -249,6 +267,10 @@ export class GitHubWatcher {
   private async runPipeline(ticket: Ticket): Promise<void> {
     const maxRetries = 2;
     const retryCount = this.state.retryCounts.get(ticket.id) ?? 0;
+
+    // Log priority
+    const priority = GitHubWatcher.getPriority(ticket);
+    this.logger.log(`Starting work on #${ticket.id} (priority ${priority}): ${ticket.title}`);
 
     // Audit trail: log full issue content before processing
     this.logger.log(`[audit] Processing #${ticket.id} by ${ticket.reporter?.name ?? ticket.reporter?.id ?? "unknown"}: ${ticket.title}`);

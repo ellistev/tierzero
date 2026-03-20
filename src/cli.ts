@@ -131,6 +131,8 @@ ${c.bold("Secondary commands:")}
   ${c.cyan("run")}    <ticket-id>                Run the agent on a single ticket
   ${c.cyan("watch")}                             Poll ServiceNow for tickets
   ${c.cyan("watch-github")}                      ${c.yellow("[deprecated]")} Use 'orchestrate' instead
+                                        Issues are processed in priority order.
+                                        Add a priority-N label (lower N = higher priority).
   ${c.cyan("import-wiki")}                       Import docs from Azure DevOps or Confluence
   ${c.cyan("mine-tickets")}                      Mine resolved tickets
   ${c.cyan("import-url")} <urls...>              Scrape URLs into the knowledge base
