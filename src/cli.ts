@@ -19,6 +19,7 @@ import { GitHubWatcher } from "./workflows/github-watcher";
 import { spawnStreaming } from "./workflows/issue-pipeline";
 import type { CodeAgent, IssueContext, CodeAgentResult } from "./workflows/issue-pipeline";
 import { ClaudeCodeAgent } from "./workflows/claude-code-agent";
+import { QwenCodeAgent } from "./workflows/qwen-code-agent";
 import { createLogger } from "./infra/logger";
 
 const log = createLogger("cli");
@@ -125,6 +126,11 @@ ${c.bold("Primary commands:")}
   ${c.cyan("status")}                            Show current system state
   ${c.cyan("init")}                              Generate orchestrator.json config
 
+${c.bold("Agent types (watch-github):")}
+  ${c.cyan("claude-code")}  Claude Code CLI (free via Max sub, requires claude installed)
+  ${c.cyan("qwen")}         Qwen 3.6 Plus via OpenRouter API ($0, needs OPENROUTER_API_KEY)
+  ${c.cyan("native")}      Built-in LLM implementer (needs --coding-model)
+
 ${c.bold("Secondary commands:")}
   ${c.cyan("index")}  <knowledge-dir>            Index documents into ChromaDB
   ${c.cyan("search")} <query>                    Search the knowledge base
@@ -201,6 +207,15 @@ ${c.bold("code implementation options (run / watch):")}
   --coding-model <name>  Coding LLM model            ${c.dim("(e.g. claude-sonnet-4-20250514, gpt-4o)")}
   --coding-provider <p>  Force provider              ${c.dim("(openai, anthropic, google — auto-detected)")}
   --coding-api-key <k>   API key for coding LLM      ${c.dim("(falls back to provider env var)")}
+
+${c.bold("Qwen agent options (watch-github --agent qwen):")}
+  --qwen-api-key <k>     OpenRouter API key          ${c.dim("(falls back to OPENROUTER_API_KEY env)")}
+  --qwen-model <model>   OpenRouter model            ${c.dim("(default: qwen/qwen3.6-plus:free)")}
+  --qwen-timeout <s>     Max seconds per issue       ${c.dim("(default: 600)")}
+
+${c.bold("Claude Code agent options (watch-github --agent claude-code):")}
+  --claude-path <path>   Path to claude CLI          ${c.dim("(default: claude)")}
+  --claude-timeout <s>   Max seconds per issue       ${c.dim("(default: 600)")}
 
 ${c.bold("watch options (continuous polling loop):")}
   --interval <s>         Poll interval in seconds    ${c.dim("(default: 60)")}
@@ -770,6 +785,62 @@ async function cmdWatchGitHub(args: ParsedArgs) {
     log.info(`  ${c.dim("workdir:")} ${workDir}`);
     log.info(`  ${c.dim("agent:")} Claude Code CLI`);
     log.info(`  ${c.dim("timeout:")} ${claudeTimeout}s per issue`);
+    if (autoMerge) log.info(`  ${c.dim("auto-merge:")} ${c.green("enabled")} (${mergeMethod})`);
+    if (assignTo) log.info(`  ${c.dim("assign:")} ${assignTo}`);
+    hr();
+
+    const watcher = new GitHubWatcher({
+      github: { token, owner, repo },
+      workDir,
+      pollIntervalMs: interval * 1000,
+      triggerLabel: label,
+      assignTo,
+      codeAgent,
+      testCommand: testCmd,
+      autoMerge,
+      mergeMethod,
+      trustedAuthors,
+      requireTrustedAuthor,
+    });
+
+    const shutdown = () => {
+      log.info(c.yellow("\nShutting down..."));
+      watcher.stop();
+      process.exit(0);
+    };
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+
+    watcher.start();
+    return;
+  }
+
+  if (agentType === "qwen") {
+    // Use Qwen 3.6 Plus via OpenRouter API (free tier, 1M context)
+    const qwenKey = str(args.flags, "qwen-api-key", process.env.OPENROUTER_API_KEY ?? "");
+    const qwenModel = str(args.flags, "qwen-model", "qwen/qwen3.6-plus:free");
+    const qwenTimeout = num(args.flags, "qwen-timeout", 600);
+
+    if (!qwenKey) die("Qwen requires an OpenRouter API key. Pass --qwen-api-key or set OPENROUTER_API_KEY.");
+
+    const codeAgent = new QwenCodeAgent({
+      apiKey: qwenKey,
+      model: qwenModel,
+      maxIterations: 30,
+      timeoutMs: qwenTimeout * 1000,
+    });
+
+    const autoMerge = bool(args.flags, "auto-merge");
+    const mergeMethod = str(args.flags, "merge-method", "squash") as "merge" | "squash" | "rebase";
+
+    log.info(`\n${c.bold("TierZero GitHub Watcher")} ${c.cyan("(Qwen 3.6 Plus — $0)")}`);
+    log.info(`  ${c.dim("repo:")} ${owner}/${repo}`);
+    log.info(`  ${c.dim("label:")} ${label}`);
+    log.info(`  ${c.dim("interval:")} ${interval}s`);
+    log.info(`  ${c.dim("workdir:")} ${workDir}`);
+    log.info(`  ${c.dim("agent:")} Qwen 3.6 Plus via OpenRouter`);
+    log.info(`  ${c.dim("model:")} ${qwenModel}`);
+    log.info(`  ${c.dim("timeout:")} ${qwenTimeout}s per issue`);
     if (autoMerge) log.info(`  ${c.dim("auto-merge:")} ${c.green("enabled")} (${mergeMethod})`);
     if (assignTo) log.info(`  ${c.dim("assign:")} ${assignTo}`);
     hr();
