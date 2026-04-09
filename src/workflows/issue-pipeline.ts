@@ -384,6 +384,21 @@ export class IssuePipeline {
         this.git.commitAll(`feat: ${ticket.title} (closes #${issueNumber})`);
       }
 
+      const changedFilesForPr = this.git.getChangedFiles();
+      if (changedFilesForPr.length === 0) {
+        result.status = "failed";
+        result.error = "No committed code changes were produced";
+
+        const failEvents = aggregate.execute(
+          new FailPipeline(pipelineId, result.error, new Date().toISOString())
+        );
+        await this.emitEvents(streamId, aggregate, failEvents);
+
+        await this.config.github.addComment(ticket.id, "TierZero produced no committed changes, so no PR was created.");
+        this.git.resetToMain();
+        return result;
+      }
+
       this.logger.log(`Pushing branch ${branch}...`);
       this.git.push(branch);
 
@@ -392,7 +407,7 @@ export class IssuePipeline {
       const prBody = PRCreator.buildPRBody({
         issueNumber,
         summary: result.summary,
-        filesChanged: this.git.getChangedFiles(),
+        filesChanged: changedFilesForPr,
         testsRun: result.testsRun,
         testsPassed: result.testsPassed,
       });

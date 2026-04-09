@@ -19,6 +19,7 @@ import { GitHubWatcher } from "./workflows/github-watcher";
 import { spawnStreaming } from "./workflows/issue-pipeline";
 import type { CodeAgent, IssueContext, CodeAgentResult } from "./workflows/issue-pipeline";
 import { ClaudeCodeAgent } from "./workflows/claude-code-agent";
+import { CodexCliAgent } from "./workflows/codex-cli-agent";
 import { QwenCodeAgent } from "./workflows/qwen-code-agent";
 import { createLogger } from "./infra/logger";
 
@@ -127,9 +128,10 @@ ${c.bold("Primary commands:")}
   ${c.cyan("init")}                              Generate orchestrator.json config
 
 ${c.bold("Agent types (watch-github):")}
-  ${c.cyan("claude-code")}  Claude Code CLI (free via Max sub, requires claude installed)
+  ${c.cyan("codex")}        OpenAI GPT-5.4 via Codex CLI (recommended)
+  ${c.cyan("claude-code")}  Claude Code CLI (legacy fallback)
   ${c.cyan("qwen")}         Qwen 3.6 Plus via OpenRouter API ($0, needs OPENROUTER_API_KEY)
-  ${c.cyan("native")}      Built-in LLM implementer (needs --coding-model)
+  ${c.cyan("native")}       Built-in LLM implementer (needs --coding-model)
 
 ${c.bold("Secondary commands:")}
   ${c.cyan("index")}  <knowledge-dir>            Index documents into ChromaDB
@@ -173,7 +175,7 @@ ${c.bold("status options:")}
 ${c.bold("init options:")}
   --owner <name>         GitHub owner (org or user)
   --repo <name>          GitHub repository name
-  --agent <type>         Agent type                  ${c.dim("(default: claude-code)")}
+  --agent <type>         Agent type                  ${c.dim("(default: codex)")}
   --interval <s>         Poll interval in seconds    ${c.dim("(default: 180)")}
   --output <path>        Output file path            ${c.dim("(default: orchestrator.json)")}
   --force                Overwrite existing config
@@ -763,7 +765,59 @@ async function cmdWatchGitHub(args: ParsedArgs) {
   const requireTrustedAuthor = unsafeAllowAll ? false : undefined; // undefined = default (true)
 
   // Check for --agent claude-code flag
-  const agentType = str(args.flags, "agent", "native");
+  const agentType = str(args.flags, "agent", "codex");
+
+  if (agentType === "codex") {
+    const codexPath = str(args.flags, "codex-path", "codex");
+    const codexModel = str(args.flags, "codex-model", "gpt-5.4");
+    const codexTimeout = num(args.flags, "codex-timeout", 900);
+
+    const codeAgent = new CodexCliAgent({
+      codexPath,
+      model: codexModel,
+      timeoutMs: codexTimeout * 1000,
+    });
+
+    const autoMerge = bool(args.flags, "auto-merge");
+    const mergeMethod = str(args.flags, "merge-method", "squash") as "merge" | "squash" | "rebase";
+
+    log.info(`\n${c.bold("TierZero GitHub Watcher")} ${c.cyan("(Codex CLI via OAuth)")}`);
+    log.info(`  ${c.dim("repo:")} ${owner}/${repo}`);
+    log.info(`  ${c.dim("label:")} ${label}`);
+    log.info(`  ${c.dim("interval:")} ${interval}s`);
+    log.info(`  ${c.dim("workdir:")} ${workDir}`);
+    log.info(`  ${c.dim("agent:")} Codex CLI`);
+    log.info(`  ${c.dim("model:")} ${codexModel}`);
+    log.info(`  ${c.dim("timeout:")} ${codexTimeout}s per issue`);
+    if (autoMerge) log.info(`  ${c.dim("auto-merge:")} ${c.green("enabled")} (${mergeMethod})`);
+    if (assignTo) log.info(`  ${c.dim("assign:")} ${assignTo}`);
+    hr();
+
+    const watcher = new GitHubWatcher({
+      github: { token, owner, repo },
+      workDir,
+      pollIntervalMs: interval * 1000,
+      triggerLabel: label,
+      assignTo,
+      codeAgent,
+      testCommand: testCmd,
+      autoMerge,
+      mergeMethod,
+      trustedAuthors,
+      requireTrustedAuthor,
+    });
+
+    const shutdown = () => {
+      log.info(c.yellow("\nShutting down..."));
+      watcher.stop();
+      process.exit(0);
+    };
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+
+    watcher.start();
+    return;
+  }
 
   if (agentType === "claude-code") {
     // Use Claude Code CLI as the code agent (free via Max subscription)
