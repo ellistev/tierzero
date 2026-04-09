@@ -1,6 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { parseTestOutput } from "./issue-pipeline";
+import { checkStagedFiles } from "../security/pre-commit-check";
 
 describe("parseTestOutput", () => {
   it("parses node:test output with all passing", () => {
@@ -66,5 +70,26 @@ describe("parseTestOutput", () => {
     assert.equal(result.total, 263);
     assert.equal(result.passing, 263);
     assert.equal(result.failing, 0);
+  });
+});
+
+describe("pre-PR secret gate", () => {
+  it("passes clean changed files", () => {
+    const result = checkStagedFiles(["src/workflows/issue-pipeline.ts"]);
+    assert.equal(result.passed, true);
+  });
+
+  it("flags secret-bearing pending files", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tierzero-secret-gate-"));
+    const file = join(dir, "pending-secret.ts");
+
+    try {
+      writeFileSync(file, 'const token = "ghp_abcdefghijklmnopqrstuvwxyz1234567890";\n', "utf-8");
+      const result = checkStagedFiles([file]);
+      assert.equal(result.passed, false);
+      assert.ok(result.findings.length > 0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
