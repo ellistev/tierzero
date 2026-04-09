@@ -19,6 +19,7 @@ import { StartPipeline, CompleteAgentWork, RecordTestRun, RecordTestFix, CreateP
 import type { IEventStore, ESEventData } from "../infra/interfaces";
 import type { Deployer, DeployConfig, DeployResult } from "../deploy/deployer";
 import { createLogger } from "../infra/logger";
+import { checkStagedFiles } from "../security/pre-commit-check";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -395,6 +396,28 @@ export class IssuePipeline {
         await this.emitEvents(streamId, aggregate, failEvents);
 
         await this.config.github.addComment(ticket.id, "TierZero produced no committed changes, so no PR was created.");
+        this.git.resetToMain();
+        return result;
+      }
+
+      const secretCheck = checkStagedFiles(changedFilesForPr);
+      if (!secretCheck.passed) {
+        result.status = "failed";
+        result.error = "Secret scan failed before PR creation";
+
+        const failEvents = aggregate.execute(
+          new FailPipeline(pipelineId, result.error, new Date().toISOString())
+        );
+        await this.emitEvents(streamId, aggregate, failEvents);
+
+        const findingsSummary = secretCheck.findings
+          .map((f) => `- \`${f.file}:${f.line}\` ${f.pattern} (${f.match})`)
+          .join("\n");
+
+        await this.config.github.addComment(
+          ticket.id,
+          `TierZero blocked PR creation because the pending changes tripped the secret scanner.\n\n${findingsSummary}`,
+        );
         this.git.resetToMain();
         return result;
       }
