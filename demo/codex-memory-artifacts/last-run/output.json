@@ -1,0 +1,7 @@
+{
+  "summary": "Verification: `npm test` passed (`node scripts/verify-answer.mjs` -> `answer verified`).",
+  "filesChanged": [
+    "docs/answer.md"
+  ],
+  "output": "Implemented the requested doc in [docs/answer.md](<C:/Users/steve/projects/tierzero/demo/codex-memory-artifacts/workdir-2026-04-24T20-35-17-227Z/docs/answer.md:1>) with the required heading, three operational bullets, and a one-line takeaway. `TASK.md` was deleted.\n\nVerification: `npm test` passed (`node scripts/verify-answer.mjs` -> `answer verified`).\n"
+}

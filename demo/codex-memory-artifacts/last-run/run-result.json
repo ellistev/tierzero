@@ -1,0 +1,6 @@
+{
+  "summary": "Verification: `npm test` passed (`node scripts/verify-answer.mjs` -> `answer verified`).",
+  "filesChanged": [
+    "docs/answer.md"
+  ]
+}

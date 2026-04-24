@@ -9,12 +9,13 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { AgentSupervisor } from "./supervisor";
 import type { NormalizedTask, TaskResult } from "./agent-registry";
 import { mergeKnowledgeScope, normalizeScopeValue } from "../knowledge/scope";
-import type { KnowledgeScope, KnowledgeStore } from "../knowledge/store";
+import type { KnowledgeEntry, KnowledgeScope, KnowledgeStore } from "../knowledge/store";
 import type { KnowledgeExtractor, ExtractionContext } from "../knowledge/extractor";
-import { taskToIssueContext } from "./task-adapter";
 
 export interface AgentExecutorConfig {
   supervisor: AgentSupervisor;
@@ -49,6 +50,7 @@ export function createAgentExecutor(
 
     // 1. Search prior knowledge for context
     const taskScope = deriveKnowledgeScope(task);
+    let priorKnowledgeEntries: KnowledgeEntry[] = [];
     let priorKnowledge: string[] = [];
     if (config.knowledgeStore) {
       try {
@@ -58,6 +60,7 @@ export function createAgentExecutor(
           minConfidence: 0.5,
           scope: taskScope,
         });
+        priorKnowledgeEntries = entries;
         priorKnowledge = entries.map(
           (e) => `[${e.type}] ${e.title}: ${e.content}`,
         );
@@ -70,6 +73,13 @@ export function createAgentExecutor(
     }
 
     const taskForExecution = enrichTaskWithPriorKnowledge(task, priorKnowledge);
+    const artifactDir = writeRunArtifactsStart(config.workDir, {
+      task,
+      taskForExecution,
+      priorKnowledgeEntries,
+      taskScope,
+      agentName: name,
+    });
 
     // 2. Create the configured managed agent
     const agent = await createManagedAgent(config, name);
@@ -82,6 +92,14 @@ export function createAgentExecutor(
     );
 
     if (!proc) {
+      writeRunArtifactsResult(artifactDir, {
+        success: false,
+        durationMs: Date.now() - startTime,
+        error: "Failed to spawn agent - concurrency limit reached or supervisor shutting down",
+        filesChanged: [],
+        output: null,
+        processOutput: "",
+      });
       return {
         success: false,
         output: null,
@@ -97,11 +115,9 @@ export function createAgentExecutor(
       config.workDir,
     );
     const durationMs = Date.now() - startTime;
+    const processOutput = proc.output.join("\n");
 
-    // 5. Convert IssueContext for knowledge extraction
-    const issueContext = taskToIssueContext(task);
-
-    // 6. Extract knowledge from completed work (best-effort)
+    // 5. Extract knowledge from completed work (best-effort)
     if (
       result.success &&
       config.knowledgeExtractor &&
@@ -128,6 +144,15 @@ export function createAgentExecutor(
         // Knowledge extraction is best-effort
       }
     }
+
+    writeRunArtifactsResult(artifactDir, {
+      success: result.success,
+      durationMs,
+      error: result.error,
+      filesChanged: result.filesChanged ?? [],
+      output: result.output,
+      processOutput,
+    });
 
     return {
       ...result,
@@ -368,4 +393,90 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+interface RunArtifactStartPayload {
+  task: NormalizedTask;
+  taskForExecution: NormalizedTask;
+  priorKnowledgeEntries: KnowledgeEntry[];
+  taskScope?: KnowledgeScope;
+  agentName: string;
+}
+
+interface RunArtifactResultPayload {
+  success: boolean;
+  durationMs: number;
+  error?: string;
+  filesChanged: string[];
+  output: unknown;
+  processOutput: string;
+}
+
+function writeRunArtifactsStart(workDir: string, payload: RunArtifactStartPayload): string {
+  const artifactDir = join(workDir, ".tierzero", "run-artifacts", payload.task.taskId);
+  const now = new Date().toISOString();
+
+  mkdirSync(artifactDir, { recursive: true });
+  writeJson(join(artifactDir, "manifest.json"), {
+    taskId: payload.task.taskId,
+    title: payload.task.title,
+    category: payload.task.category,
+    priority: payload.task.priority,
+    agentName: payload.agentName,
+    status: "running",
+    createdAt: now,
+    updatedAt: now,
+    scope: payload.taskScope ?? null,
+  });
+  writeJson(join(artifactDir, "input.json"), {
+    task: payload.task,
+    taskForExecution: payload.taskForExecution,
+    scope: payload.taskScope ?? null,
+  });
+  writeJson(join(artifactDir, "knowledge-bank.json"), payload.priorKnowledgeEntries);
+  writeFileSync(join(artifactDir, "input-task.md"), renderInputTask(payload.taskForExecution), "utf-8");
+
+  return artifactDir;
+}
+
+function writeRunArtifactsResult(artifactDir: string, payload: RunArtifactResultPayload): void {
+  const now = new Date().toISOString();
+  writeJson(join(artifactDir, "output.json"), {
+    success: payload.success,
+    durationMs: payload.durationMs,
+    error: payload.error ?? null,
+    filesChanged: payload.filesChanged,
+    output: payload.output,
+    processOutput: payload.processOutput,
+  });
+  writeJson(join(artifactDir, "manifest.json"), {
+    ...readJson(join(artifactDir, "manifest.json")),
+    status: payload.success ? "completed" : "failed",
+    updatedAt: now,
+  });
+}
+
+function renderInputTask(task: NormalizedTask): string {
+  return [
+    `# ${task.title}`,
+    "",
+    `- Task ID: ${task.taskId}`,
+    `- Category: ${task.category}`,
+    `- Priority: ${task.priority}`,
+    "",
+    "## Description",
+    task.description || "(empty)",
+  ].join("\n");
+}
+
+function writeJson(path: string, value: unknown): void {
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+}
+
+function readJson(path: string): Record<string, unknown> {
+  try {
+    return JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
 }

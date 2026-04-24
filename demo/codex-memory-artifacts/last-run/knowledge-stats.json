@@ -1,0 +1,106 @@
+{
+  "totalEntries": 2,
+  "byType": {
+    "solution": 1,
+    "pattern": 1
+  },
+  "mostUsed": [
+    {
+      "type": "solution",
+      "title": "ACME password reset policy",
+      "content": "Always verify the user's identity before starting a reset. Contractor accounts require manager approval before unlocking or resetting.",
+      "source": {
+        "taskId": "seed-1",
+        "agentName": "seed",
+        "timestamp": "2026-04-24T20:35:17.418Z"
+      },
+      "tags": [
+        "password-reset",
+        "acme",
+        "approval"
+      ],
+      "relatedFiles": [
+        "README.md"
+      ],
+      "confidence": 0.95,
+      "supersededBy": null,
+      "id": "a1ed0046-930c-4bff-b0f8-2d3cf031e6b0",
+      "usageCount": 1,
+      "lastUsedAt": "2026-04-24T20:35:17.448Z",
+      "createdAt": "2026-04-24T20:35:17.419Z"
+    },
+    {
+      "type": "pattern",
+      "title": "Tenant-specific reset guidance",
+      "content": "Password reset notes must explicitly say the workflow is tenant-specific so operators do not reuse the wrong playbook across customers.",
+      "source": {
+        "taskId": "seed-2",
+        "agentName": "seed",
+        "timestamp": "2026-04-24T20:35:17.419Z"
+      },
+      "tags": [
+        "tenant",
+        "password-reset"
+      ],
+      "relatedFiles": [
+        "README.md"
+      ],
+      "confidence": 0.9,
+      "supersededBy": null,
+      "id": "528833ef-f1ef-4975-879f-f78dd3091a14",
+      "usageCount": 1,
+      "lastUsedAt": "2026-04-24T20:35:17.448Z",
+      "createdAt": "2026-04-24T20:35:17.419Z"
+    }
+  ],
+  "recentlyAdded": [
+    {
+      "type": "solution",
+      "title": "ACME password reset policy",
+      "content": "Always verify the user's identity before starting a reset. Contractor accounts require manager approval before unlocking or resetting.",
+      "source": {
+        "taskId": "seed-1",
+        "agentName": "seed",
+        "timestamp": "2026-04-24T20:35:17.418Z"
+      },
+      "tags": [
+        "password-reset",
+        "acme",
+        "approval"
+      ],
+      "relatedFiles": [
+        "README.md"
+      ],
+      "confidence": 0.95,
+      "supersededBy": null,
+      "id": "a1ed0046-930c-4bff-b0f8-2d3cf031e6b0",
+      "usageCount": 1,
+      "lastUsedAt": "2026-04-24T20:35:17.448Z",
+      "createdAt": "2026-04-24T20:35:17.419Z"
+    },
+    {
+      "type": "pattern",
+      "title": "Tenant-specific reset guidance",
+      "content": "Password reset notes must explicitly say the workflow is tenant-specific so operators do not reuse the wrong playbook across customers.",
+      "source": {
+        "taskId": "seed-2",
+        "agentName": "seed",
+        "timestamp": "2026-04-24T20:35:17.419Z"
+      },
+      "tags": [
+        "tenant",
+        "password-reset"
+      ],
+      "relatedFiles": [
+        "README.md"
+      ],
+      "confidence": 0.9,
+      "supersededBy": null,
+      "id": "528833ef-f1ef-4975-879f-f78dd3091a14",
+      "usageCount": 1,
+      "lastUsedAt": "2026-04-24T20:35:17.448Z",
+      "createdAt": "2026-04-24T20:35:17.419Z"
+    }
+  ],
+  "averageConfidence": 0.925
+}

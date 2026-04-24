@@ -1,0 +1,10 @@
+{
+  "taskId": "demo-codex-101",
+  "title": "Document the ACME password reset flow",
+  "category": "demo",
+  "priority": "normal",
+  "agentName": "codex",
+  "status": "completed",
+  "createdAt": "2026-04-24T20:36:27.405Z",
+  "updatedAt": "2026-04-24T20:36:27.405Z"
+}

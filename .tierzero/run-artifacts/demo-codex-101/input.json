@@ -1,0 +1,17 @@
+{
+  "issue": {
+    "number": 101,
+    "title": "Document the ACME password reset flow",
+    "description": "Create docs/answer.md.\nRequirements:\n- include a short heading\n- include three bullets covering identity verification, manager approval for contractors, and tenant-specific handling\n- end with a one-line operator takeaway",
+    "labels": [
+      "documentation",
+      "password-reset"
+    ],
+    "comments": [
+      "Keep it short and operational.",
+      "Use the prior knowledge rather than inventing policy."
+    ]
+  },
+  "workDir": "C:\\Users\\steve\\projects\\tierzero\\demo\\codex-memory-artifacts\\workdir-2026-04-24T20-35-17-227Z",
+  "artifactsDir": "C:\\Users\\steve\\projects\\tierzero\\demo\\codex-memory-artifacts\\last-run"
+}

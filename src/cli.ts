@@ -1216,6 +1216,7 @@ async function cmdOrchestrate(args: ParsedArgs) {
   const { HealthAggregator } = await import("./monitoring/health-aggregator");
   const { buildComponentCheckers } = await import("./monitoring/health-bridge");
   const { dashboardRouter } = await import("./infra/rest/dashboard-router");
+  const { runArtifactsRouter } = await import("./infra/rest/run-artifacts-router");
   const { NotificationManager } = await import("./comms/notification-manager");
 
   const metrics = new MetricsCollector();
@@ -1380,6 +1381,9 @@ async function cmdOrchestrate(args: ParsedArgs) {
 
   // Mount monitoring dashboard API
   app.use(dashboardRouter({ healthAggregator, alertEngine, metrics }));
+
+  // Mount run artifact API + UI
+  app.use(runArtifactsRouter());
 
   // Mount deployments REST API
   app.use(deploymentsRouter({ store: deployStore }));

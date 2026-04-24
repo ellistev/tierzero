@@ -1,0 +1,31 @@
+{
+  "agents": {
+    "default-agent": {
+      "type": "codex",
+      "capabilities": ["code", "research"],
+      "maxConcurrent": 1
+    }
+  },
+  "scheduler": {
+    "timezone": "UTC",
+    "jobs": []
+  },
+  "knowledge": {
+    "enabled": false,
+    "backend": "memory",
+    "extractor": {
+      "enabled": false
+    }
+  },
+  "apiPort": 3501,
+  "maxConcurrent": 1,
+  "taskTimeoutMs": 900000,
+  "codex": {
+    "path": "codex",
+    "model": "gpt-5.4",
+    "timeoutMs": 900000
+  },
+  "prReview": {
+    "enabled": false
+  }
+}

@@ -124,6 +124,24 @@ console.log("answer verified");
   writeFileSync(join(artifactsDir, "run-result.json"), JSON.stringify(result, null, 2) + "\n", "utf-8");
   writeFileSync(join(artifactsDir, "knowledge-stats.json"), JSON.stringify(await knowledgeStore.stats(), null, 2) + "\n", "utf-8");
 
+  const viewerDir = join(process.cwd(), ".tierzero", "run-artifacts", "demo-codex-101");
+  rmSync(viewerDir, { recursive: true, force: true });
+  mkdirSync(viewerDir, { recursive: true });
+  copyFileSync(join(artifactsDir, "input-task.md"), join(viewerDir, "input-task.md"));
+  copyFileSync(join(artifactsDir, "knowledge-bank.json"), join(viewerDir, "knowledge-bank.json"));
+  copyFileSync(join(artifactsDir, "output.json"), join(viewerDir, "output.json"));
+  writeFileSync(join(viewerDir, "input.json"), JSON.stringify({ issue, workDir, artifactsDir }, null, 2) + "\n", "utf-8");
+  writeFileSync(join(viewerDir, "manifest.json"), JSON.stringify({
+    taskId: "demo-codex-101",
+    title: issue.title,
+    category: "demo",
+    priority: "normal",
+    agentName: "codex",
+    status: result.summary ? "completed" : "failed",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }, null, 2) + "\n", "utf-8");
+
   writeFileSync(join(rootDir, "LATEST_RUN.txt"), `${runId}\n${workDir}\n${artifactsDir}\n`, "utf-8");
 
   console.log(`Artifacts written to: ${artifactsDir}`);
