@@ -78,13 +78,30 @@ Before broader GTM, prove these in one deployment:
 - Started Issue 1 code by introducing a knowledge-store factory, explicit knowledge backend config validation, and orchestrator wiring for configurable memory vs Chroma backends
 - Finished the first usable Issue 1 pass: orchestrator config now carries explicit knowledge settings, managed execution receives retrieved prior knowledge, knowledge extraction is instantiated when configured credentials exist, and executor runtime captures changed files/git diff for write-back
 - Landed Issue 2 scoped retrieval: knowledge entries now carry tenant/workflow/queue scope, in-memory and Chroma retrieval filter out incompatible scope, scoped matches outrank global entries, and orchestrator derives scope from task metadata/payload for both retrieval and write-back
+- Added a Codex-backed run-artifact demo and viewer path so input docs, retrieved knowledge, and output can be inspected together instead of hand-waved in chat
+- Mounted a run-artifact UI/API in the orchestrator codebase and verified it with targeted tests plus full suite
+- Verified the viewer in this local environment on port 3501 because port 3500 is currently occupied by a different local `node server.js`
 
 ### Next top task
 Start Issue 3 for the memory/context moat:
 - define and persist structured run records for every handled task
-- record success, failure, and escalation outcomes instead of relying on loose summaries
+- record success, failure, killed/hung, and escalation outcomes instead of relying on loose summaries
 - capture retrieved context ids, actions taken, workflow, and scope fields
 - make the run-record path queryable enough to support later similar-case recall
+
+### Cold-start resume contract
+When resuming TierZero cold, do this in order:
+1. Read `RALPH_LOOP.md`
+2. Read `CURRENT_TASK.md`
+3. Read `MEMORY_CONTEXT_ISSUE_SEQUENCE.md`
+4. Inspect only the files named in `CURRENT_TASK.md`
+5. Execute exactly one task before updating the docs
+
+### Known-good local commands
+- Codex demo artifact generation: `npx tsx demo/run-codex-memory-demo.ts`
+- Clean local viewer/orchestrator boot: `npx tsx src/cli.ts orchestrate --config orchestrator.run-artifacts.json --skip-health-check`
+- Viewer URL in this environment: `http://localhost:3501/run-artifacts`
+- Do not assume `http://localhost:3500` is TierZero in this environment
 
 ## Anti-goals
 - Do not chase tiny side products for revenue right now
