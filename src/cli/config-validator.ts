@@ -54,6 +54,20 @@ export interface OrchestratorConfig {
       maxConsecutiveFailures?: number;
     }>;
   };
+  knowledge?: {
+    enabled?: boolean;
+    backend?: "memory" | "chroma";
+    chroma?: {
+      collectionName?: string;
+      chromaUrl?: string;
+      openAIApiKey?: string;
+    };
+    extractor?: {
+      enabled?: boolean;
+      model?: string;
+      openAIApiKey?: string;
+    };
+  };
   apiPort?: number;
   maxConcurrent?: number;
   taskTimeoutMs?: number;
@@ -65,6 +79,7 @@ export interface OrchestratorConfig {
 // ---------------------------------------------------------------------------
 
 const KNOWN_AGENT_TYPES = new Set([
+  "codex",
   "claude-code",
   "native",
   "implementer",
@@ -210,6 +225,59 @@ export function validateConfig(config: OrchestratorConfig): ValidationResult {
     const wh = config.adapters.webhook;
     if (wh.port !== undefined && (typeof wh.port !== "number" || wh.port < 1 || wh.port > 65535)) {
       errors.push({ field: "adapters.webhook.port", message: "Webhook port must be between 1 and 65535" });
+    }
+  }
+
+  // Validate knowledge backend config if present
+  if (config.knowledge) {
+    const knowledge = config.knowledge;
+    if (knowledge.enabled !== false && knowledge.backend === undefined) {
+      errors.push({
+        field: "knowledge.backend",
+        message: "Knowledge backend must be set explicitly when knowledge is enabled",
+      });
+    }
+
+    if (
+      knowledge.backend !== undefined &&
+      knowledge.backend !== "memory" &&
+      knowledge.backend !== "chroma"
+    ) {
+      errors.push({
+        field: "knowledge.backend",
+        message: "Knowledge backend must be one of: memory, chroma",
+      });
+    }
+
+    if (knowledge.chroma?.chromaUrl !== undefined && typeof knowledge.chroma.chromaUrl !== "string") {
+      errors.push({
+        field: "knowledge.chroma.chromaUrl",
+        message: "Knowledge Chroma URL must be a string",
+      });
+    }
+
+    if (knowledge.chroma?.collectionName !== undefined && typeof knowledge.chroma.collectionName !== "string") {
+      errors.push({
+        field: "knowledge.chroma.collectionName",
+        message: "Knowledge Chroma collectionName must be a string",
+      });
+    }
+
+    if (knowledge.extractor?.model !== undefined && typeof knowledge.extractor.model !== "string") {
+      errors.push({
+        field: "knowledge.extractor.model",
+        message: "Knowledge extractor model must be a string",
+      });
+    }
+
+    if (
+      knowledge.extractor?.openAIApiKey !== undefined &&
+      typeof knowledge.extractor.openAIApiKey !== "string"
+    ) {
+      errors.push({
+        field: "knowledge.extractor.openAIApiKey",
+        message: "Knowledge extractor OpenAI API key must be a string",
+      });
     }
   }
 

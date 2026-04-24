@@ -8,17 +8,23 @@
  * 4. Returns TaskResult with success/failure, files changed, PR URL
  */
 
+import { execFileSync } from "node:child_process";
 import type { AgentSupervisor } from "./supervisor";
 import type { NormalizedTask, TaskResult } from "./agent-registry";
-import type { KnowledgeStore } from "../knowledge/store";
+import { mergeKnowledgeScope, normalizeScopeValue } from "../knowledge/scope";
+import type { KnowledgeScope, KnowledgeStore } from "../knowledge/store";
 import type { KnowledgeExtractor, ExtractionContext } from "../knowledge/extractor";
 import { taskToIssueContext } from "./task-adapter";
 
 export interface AgentExecutorConfig {
   supervisor: AgentSupervisor;
   workDir: string;
+  agentType?: string;
   claudePath?: string;
   claudeTimeoutMs?: number;
+  codexPath?: string;
+  codexModel?: string;
+  codexTimeoutMs?: number;
   testCommand?: string;
   github?: {
     token: string;
@@ -39,9 +45,10 @@ export function createAgentExecutor(
 ): (task: NormalizedTask) => Promise<TaskResult> {
   return async (task: NormalizedTask): Promise<TaskResult> => {
     const startTime = Date.now();
-    const name = agentName ?? "claude-code";
+    const name = agentName ?? config.agentType ?? "claude-code";
 
     // 1. Search prior knowledge for context
+    const taskScope = deriveKnowledgeScope(task);
     let priorKnowledge: string[] = [];
     if (config.knowledgeStore) {
       try {
@@ -49,6 +56,7 @@ export function createAgentExecutor(
         const entries = await config.knowledgeStore.search(query, {
           limit: 5,
           minConfidence: 0.5,
+          scope: taskScope,
         });
         priorKnowledge = entries.map(
           (e) => `[${e.type}] ${e.title}: ${e.content}`,
@@ -61,20 +69,15 @@ export function createAgentExecutor(
       }
     }
 
-    // 2. Create a ManagedClaudeCodeAgent
-    const { ManagedClaudeCodeAgent } = await import(
-      "../workflows/managed-claude-code-agent"
-    );
-    const agent = new ManagedClaudeCodeAgent({
-      name,
-      claudePath: config.claudePath,
-      timeoutMs: config.claudeTimeoutMs,
-    });
+    const taskForExecution = enrichTaskWithPriorKnowledge(task, priorKnowledge);
+
+    // 2. Create the configured managed agent
+    const agent = await createManagedAgent(config, name);
 
     // 3. Spawn via Supervisor
     const proc = await config.supervisor.spawn(
       agent,
-      task,
+      taskForExecution,
       config.claudeTimeoutMs,
     );
 
@@ -88,7 +91,11 @@ export function createAgentExecutor(
     }
 
     // 4. Wait for the agent to complete by polling process status
-    const result = await waitForCompletion(config.supervisor, proc.processId);
+    const result = await waitForCompletion(
+      config.supervisor,
+      proc.processId,
+      config.workDir,
+    );
     const durationMs = Date.now() - startTime;
 
     // 5. Convert IssueContext for knowledge extraction
@@ -106,13 +113,16 @@ export function createAgentExecutor(
           taskTitle: task.title,
           taskDescription: task.description,
           agentName: name,
-          gitDiff: "",
+          gitDiff: collectGitDiff(config.workDir),
           agentOutput: proc.output.join("\n").slice(-2000),
           filesModified: result.filesChanged ?? [],
         };
         const entries = await config.knowledgeExtractor.extract(extractionCtx);
         for (const entry of entries) {
-          await config.knowledgeStore.add(entry);
+          await config.knowledgeStore.add({
+            ...entry,
+            scope: mergeKnowledgeScope(entry.scope, taskScope),
+          });
         }
       } catch {
         // Knowledge extraction is best-effort
@@ -126,12 +136,79 @@ export function createAgentExecutor(
   };
 }
 
+export function deriveKnowledgeScope(task: NormalizedTask): KnowledgeScope | undefined {
+  const sources = [task.source.metadata, asRecord(task.source.payload)].filter(asRecord);
+
+  const tenant = findScopeValue(sources, [
+    "tenant",
+    "tenantId",
+    "customer",
+    "customerId",
+    "account",
+    "accountId",
+    "organization",
+    "organizationId",
+    "org",
+    "workspace",
+    "workspaceId",
+  ]);
+
+  const workflowType = findScopeValue(sources, [
+    "workflowType",
+    "workflow",
+    "intent",
+    "requestType",
+    "taskType",
+    "ticketType",
+    "playbook",
+  ]) ?? normalizeScopeValue(task.category);
+
+  const queue = findScopeValue(sources, [
+    "queue",
+    "queueName",
+    "board",
+    "serviceDesk",
+    "serviceDeskId",
+    "project",
+    "projectKey",
+  ]);
+
+  return mergeKnowledgeScope(undefined, {
+    tenant,
+    workflowType,
+    queue,
+  });
+}
+
+export function enrichTaskWithPriorKnowledge(
+  task: NormalizedTask,
+  priorKnowledge: string[],
+): NormalizedTask {
+  if (priorKnowledge.length === 0) return task;
+
+  const knowledgeSection = [
+    task.description.trim(),
+    "",
+    "## Prior Knowledge",
+    "Use the following prior lessons and patterns if they are relevant:",
+    ...priorKnowledge.map((entry, index) => `${index + 1}. ${entry}`),
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  return {
+    ...task,
+    description: knowledgeSection,
+  };
+}
+
 /**
  * Wait for a supervised agent process to reach a terminal state.
  */
 async function waitForCompletion(
   supervisor: AgentSupervisor,
   processId: string,
+  workDir?: string,
 ): Promise<TaskResult> {
   const POLL_INTERVAL = 500;
   const MAX_WAIT = 15 * 60 * 1000; // 15 minutes max
@@ -156,7 +233,7 @@ async function waitForCompletion(
             message: `Agent completed task`,
             outputLines: proc.output.length,
           },
-          filesChanged: [],
+          filesChanged: workDir ? collectChangedFiles(workDir) : [],
           durationMs: Date.now() - start,
         };
 
@@ -196,4 +273,99 @@ async function waitForCompletion(
     error: "Timed out waiting for agent completion",
     durationMs: Date.now() - start,
   };
+}
+
+async function createManagedAgent(config: AgentExecutorConfig, name: string) {
+  if (config.agentType === "codex") {
+    const { ManagedCodexAgent } = await import("../workflows/managed-codex-agent");
+    return new ManagedCodexAgent({
+      name,
+      codexPath: config.codexPath,
+      timeoutMs: config.codexTimeoutMs,
+      model: config.codexModel,
+    });
+  }
+
+  const { ManagedClaudeCodeAgent } = await import("../workflows/managed-claude-code-agent");
+  return new ManagedClaudeCodeAgent({
+    name,
+    claudePath: config.claudePath,
+    timeoutMs: config.claudeTimeoutMs,
+  });
+}
+
+function collectChangedFiles(workDir: string): string[] {
+  try {
+    const changed = execFileSync("git", ["diff", "--name-only", "HEAD", "--"], {
+      cwd: workDir,
+      encoding: "utf-8",
+      stdio: "pipe",
+    })
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard"], {
+      cwd: workDir,
+      encoding: "utf-8",
+      stdio: "pipe",
+    })
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    return [...new Set([...changed, ...untracked])];
+  } catch {
+    return [];
+  }
+}
+
+function collectGitDiff(workDir: string): string {
+  try {
+    return execFileSync("git", ["diff", "HEAD", "--"], {
+      cwd: workDir,
+      encoding: "utf-8",
+      stdio: "pipe",
+      maxBuffer: 1024 * 1024,
+    }).slice(0, 5000);
+  } catch {
+    return "";
+  }
+}
+
+function findScopeValue(sources: Record<string, unknown>[], keys: string[]): string | undefined {
+  for (const source of sources) {
+    const found = findScopeValueInRecord(source, new Set(keys), 0);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function findScopeValueInRecord(
+  record: Record<string, unknown>,
+  keys: Set<string>,
+  depth: number,
+): string | undefined {
+  if (depth > 2) return undefined;
+
+  for (const [key, value] of Object.entries(record)) {
+    if (keys.has(key) && typeof value === "string") {
+      return normalizeScopeValue(value);
+    }
+  }
+
+  for (const value of Object.values(record)) {
+    if (asRecord(value)) {
+      const found = findScopeValueInRecord(value, keys, depth + 1);
+      if (found) return found;
+    }
+  }
+
+  return undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }

@@ -1065,14 +1065,14 @@ async function cmdOrchestrate(args: ParsedArgs) {
     cleanupIntervalMs: 15_000,
   });
 
-  // Initialize Knowledge Store (in-memory or ChromaDB)
+  // Initialize Knowledge Store
   let knowledgeStore: import("./knowledge/store").KnowledgeStore | undefined;
   let knowledgeExtractor: import("./knowledge/extractor").KnowledgeExtractor | undefined;
   const knowledgeCfg = config.knowledge ?? {};
-  if (knowledgeCfg.enabled !== false) {
-    const { InMemoryKnowledgeStore } = await import("./knowledge/in-memory-store");
-    knowledgeStore = new InMemoryKnowledgeStore();
-  }
+  const { createKnowledgeStore } = await import("./knowledge/factory");
+  const { createKnowledgeExtractor } = await import("./knowledge/extractor-factory");
+  knowledgeStore = await createKnowledgeStore(knowledgeCfg);
+  knowledgeExtractor = createKnowledgeExtractor(knowledgeCfg.extractor);
 
   // Wire Supervisor events to AgentProcessStore read model
   const { AgentProcessStore } = await import("./read-models/agent-processes");
@@ -1098,8 +1098,12 @@ async function cmdOrchestrate(args: ParsedArgs) {
       execute: createAgentExecutor({
         supervisor,
         workDir: process.cwd(),
+        agentType: agentCfg.type,
         claudePath: config.claude?.path,
         claudeTimeoutMs: config.claude?.timeoutMs ?? config.taskTimeoutMs ?? 900_000,
+        codexPath: config.codex?.path,
+        codexModel: config.codex?.model ?? "gpt-5.4",
+        codexTimeoutMs: config.codex?.timeoutMs ?? config.taskTimeoutMs ?? 900_000,
         testCommand: config.testCommand,
         github: ghAdapterCfg ? {
           token: ghAdapterCfg.token ?? process.env.GITHUB_TOKEN ?? "",

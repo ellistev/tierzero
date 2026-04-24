@@ -81,6 +81,49 @@ describe("InMemoryKnowledgeStore", () => {
     assert.equal(results[0].type, "error");
   });
 
+  it("prefers tenant and workflow scoped matches over global matches", async () => {
+    const store = new InMemoryKnowledgeStore();
+    await store.add(makeEntry({
+      title: "Global password reset guidance",
+      tags: ["password", "reset"],
+      scope: undefined,
+    }));
+    await store.add(makeEntry({
+      title: "Acme password reset guidance",
+      tags: ["password", "reset"],
+      scope: { tenant: "acme", workflowType: "password-reset" },
+    }));
+
+    const results = await store.search("password reset", {
+      scope: { tenant: "acme", workflowType: "password-reset" },
+    });
+
+    assert.equal(results.length, 2);
+    assert.equal(results[0].title, "Acme password reset guidance");
+    assert.equal(results[1].title, "Global password reset guidance");
+  });
+
+  it("does not return incompatible tenant-scoped entries", async () => {
+    const store = new InMemoryKnowledgeStore();
+    await store.add(makeEntry({
+      title: "Acme password reset guidance",
+      tags: ["password", "reset"],
+      scope: { tenant: "acme", workflowType: "password-reset" },
+    }));
+    await store.add(makeEntry({
+      title: "Globex password reset guidance",
+      tags: ["password", "reset"],
+      scope: { tenant: "globex", workflowType: "password-reset" },
+    }));
+
+    const results = await store.search("password reset", {
+      scope: { tenant: "acme", workflowType: "password-reset" },
+    });
+
+    assert.equal(results.length, 1);
+    assert.equal(results[0].title, "Acme password reset guidance");
+  });
+
   it("should findByTags with matchAll=false (any)", async () => {
     const store = new InMemoryKnowledgeStore();
     await store.add(makeEntry({ tags: ["connector", "zendesk"] }));

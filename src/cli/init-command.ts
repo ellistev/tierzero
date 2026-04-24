@@ -43,7 +43,7 @@ export interface InitOptions {
 export function generateConfig(options: InitOptions): OrchestratorConfig {
   const owner = options.owner ?? "your-org";
   const repo = options.repo ?? "your-repo";
-  const agentType = options.agent ?? "claude-code";
+  const agentType = options.agent ?? "codex";
   const interval = options.interval ?? 180;
 
   const config: OrchestratorConfig = {
@@ -67,6 +67,19 @@ export function generateConfig(options: InitOptions): OrchestratorConfig {
     scheduler: {
       timezone: "UTC",
       jobs: [],
+    },
+    knowledge: {
+      enabled: false,
+      backend: "memory",
+      extractor: {
+        enabled: true,
+        model: "gpt-4o-mini",
+      },
+    },
+    codex: {
+      path: "codex",
+      model: "gpt-5.4",
+      timeoutMs: 900_000,
     },
     apiPort: 3500,
     maxConcurrent: 3,
@@ -119,8 +132,9 @@ export async function cmdInit(options: InitOptions): Promise<string> {
   log.info("");
   log.info(fmt.bold("  Configuration:"));
   log.info(`    GitHub:    ${config.adapters?.github?.owner}/${config.adapters?.github?.repo}`);
-  log.info(`    Agent:     ${Object.values(config.agents ?? {})[0]?.type ?? "claude-code"}`);
+  log.info(`    Agent:     ${Object.values(config.agents ?? {})[0]?.type ?? "codex"}`);
   log.info(`    Interval:  ${config.adapters?.github?.interval ?? 180}s`);
+  log.info(`    Knowledge: ${config.knowledge?.enabled ? config.knowledge.backend : "disabled"}`);
   log.info(`    API Port:  ${config.apiPort ?? 3500}`);
   log.info("");
   log.info(fmt.bold("  Next steps:"));

@@ -42,6 +42,30 @@ export interface StartupHealthResult {
 // Individual checks
 // ---------------------------------------------------------------------------
 
+export async function checkCodexCLI(options?: {
+  execFn?: (cmd: string) => Promise<{ stdout: string; stderr: string }>;
+}): Promise<HealthCheckResult> {
+  try {
+    const exec = options?.execFn ?? defaultExec;
+    const { stdout } = await exec("codex --version");
+    return { component: "Codex CLI", status: "ok", message: `Installed (${stdout.trim()})` };
+  } catch {
+    return { component: "Codex CLI", status: "warn", message: "Not installed or not in PATH" };
+  }
+}
+
+export async function checkCodexAuth(options?: {
+  execFn?: (cmd: string) => Promise<{ stdout: string; stderr: string }>;
+}): Promise<HealthCheckResult> {
+  try {
+    const exec = options?.execFn ?? defaultExec;
+    await exec("codex login status");
+    return { component: "Codex Auth", status: "ok", message: "Authenticated" };
+  } catch {
+    return { component: "Codex Auth", status: "warn", message: "Not authenticated (run 'codex login')" };
+  }
+}
+
 export async function checkClaudeCodeCLI(options?: {
   execFn?: (cmd: string) => Promise<{ stdout: string; stderr: string }>;
 }): Promise<HealthCheckResult> {
@@ -131,14 +155,30 @@ export async function runStartupHealthCheck(
     critical = true;
   }
 
-  // 2. Claude Code CLI
-  const cliCheck = await checkClaudeCodeCLI({ execFn: options?.execFn });
-  checks.push(cliCheck);
+  const configuredAgentTypes = new Set(
+    Object.values(config.agents ?? {})
+      .map((agent) => agent?.type)
+      .filter((type): type is string => typeof type === "string"),
+  );
 
-  // 3. Claude Code auth
-  if (cliCheck.status === "ok") {
-    const authCheck = await checkClaudeCodeAuth({ execFn: options?.execFn });
-    checks.push(authCheck);
+  if (configuredAgentTypes.size === 0 || configuredAgentTypes.has("codex")) {
+    const cliCheck = await checkCodexCLI({ execFn: options?.execFn });
+    checks.push(cliCheck);
+
+    if (cliCheck.status === "ok") {
+      const authCheck = await checkCodexAuth({ execFn: options?.execFn });
+      checks.push(authCheck);
+    }
+  }
+
+  if (configuredAgentTypes.has("claude-code")) {
+    const cliCheck = await checkClaudeCodeCLI({ execFn: options?.execFn });
+    checks.push(cliCheck);
+
+    if (cliCheck.status === "ok") {
+      const authCheck = await checkClaudeCodeAuth({ execFn: options?.execFn });
+      checks.push(authCheck);
+    }
   }
 
   // 4. GitHub token (if GitHub adapter configured)

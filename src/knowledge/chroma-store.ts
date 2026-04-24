@@ -10,6 +10,7 @@ import { OpenAIEmbeddings } from "@langchain/openai";
 import { Chroma } from "@langchain/community/vectorstores/chroma";
 import type { Document } from "@langchain/core/documents";
 import type { Where } from "chromadb";
+import { isScopeCompatible, normalizeKnowledgeScope, scoreScopeMatch } from "./scope";
 import type { KnowledgeEntry, KnowledgeStore, KnowledgeStats, SearchOptions } from "./store";
 
 export interface ChromaKnowledgeStoreConfig {
@@ -28,6 +29,9 @@ interface ChromaMetadata {
   title: string;
   tags: string;            // JSON-encoded string[]
   relatedFiles: string;    // JSON-encoded string[]
+  tenant: string;
+  workflowType: string;
+  queue: string;
   confidence: number;
   usageCount: number;
   lastUsedAt: string;      // "" if null
@@ -74,12 +78,16 @@ export class ChromaKnowledgeStore implements KnowledgeStore {
     const id = randomUUID();
     const now = new Date().toISOString();
 
+    const scope = normalizeKnowledgeScope(entry.scope);
     const metadata: ChromaMetadata = {
       entryId: id,
       type: entry.type,
       title: entry.title,
       tags: JSON.stringify(entry.tags),
       relatedFiles: JSON.stringify(entry.relatedFiles),
+      tenant: scope?.tenant ?? "",
+      workflowType: scope?.workflowType ?? "",
+      queue: scope?.queue ?? "",
       confidence: entry.confidence,
       usageCount: 0,
       lastUsedAt: "",
@@ -107,19 +115,30 @@ export class ChromaKnowledgeStore implements KnowledgeStore {
     const where = this.buildWhereClause(options);
 
     const raw: [Document, number][] = await store.similaritySearchWithScore(
-      query, limit * 2, where  // fetch extra to allow filtering
+      query, Math.max(limit * 4, 20), where
     );
 
     return raw
-      .map(([doc]) => this.docToEntry(doc))
-      .filter((e) => e.confidence >= minConfidence)
-      .filter((e) => e.supersededBy === null)
-      .filter((e) => {
+      .map(([doc, distance]) => ({
+        entry: this.docToEntry(doc),
+        semanticScore: -distance,
+      }))
+      .filter((r) => r.entry.confidence >= minConfidence)
+      .filter((r) => r.entry.supersededBy === null)
+      .filter((r) => isScopeCompatible(r.entry.scope, options.scope))
+      .filter((r) => {
         if (options.maxAge === undefined) return true;
         const cutoff = Date.now() - options.maxAge * 24 * 60 * 60 * 1000;
-        return new Date(e.createdAt).getTime() >= cutoff;
+        return new Date(r.entry.createdAt).getTime() >= cutoff;
       })
-      .slice(0, limit);
+      .sort(
+        (a, b) =>
+          scoreScopeMatch(b.entry.scope, options.scope) - scoreScopeMatch(a.entry.scope, options.scope) ||
+          b.semanticScore - a.semanticScore ||
+          b.entry.usageCount - a.entry.usageCount,
+      )
+      .slice(0, limit)
+      .map((r) => r.entry);
   }
 
   async findByTags(tags: string[], matchAll = false): Promise<KnowledgeEntry[]> {
@@ -238,6 +257,11 @@ export class ChromaKnowledgeStore implements KnowledgeStore {
       },
       tags,
       relatedFiles,
+      scope: normalizeKnowledgeScope({
+        tenant: m.tenant,
+        workflowType: m.workflowType,
+        queue: m.queue,
+      }),
       confidence: m.confidence,
       usageCount: m.usageCount,
       lastUsedAt: m.lastUsedAt || null,

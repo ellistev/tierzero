@@ -4,6 +4,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { isScopeCompatible, normalizeKnowledgeScope, scoreScopeMatch } from "./scope";
 import type { KnowledgeEntry, KnowledgeStore, KnowledgeStats, SearchOptions } from "./store";
 
 export class InMemoryKnowledgeStore implements KnowledgeStore {
@@ -16,6 +17,7 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
     const full: KnowledgeEntry = {
       ...entry,
       id,
+      scope: normalizeKnowledgeScope(entry.scope),
       usageCount: 0,
       lastUsedAt: null,
       createdAt: new Date().toISOString(),
@@ -32,7 +34,8 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
 
     let results = Array.from(this.entries.values())
       .filter((e) => e.supersededBy === null)
-      .filter((e) => e.confidence >= minConfidence);
+      .filter((e) => e.confidence >= minConfidence)
+      .filter((e) => isScopeCompatible(e.scope, options.scope));
 
     if (options.types && options.types.length > 0) {
       results = results.filter((e) => options.types!.includes(e.type));
@@ -51,12 +54,21 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
     const scored = results.map((e) => {
       const haystack = `${e.title} ${e.content} ${e.tags.join(" ")}`.toLowerCase();
       const matchCount = queryTerms.filter((t) => haystack.includes(t)).length;
-      return { entry: e, score: queryTerms.length > 0 ? matchCount / queryTerms.length : 0 };
+      return {
+        entry: e,
+        queryScore: queryTerms.length > 0 ? matchCount / queryTerms.length : 0,
+        scopeScore: scoreScopeMatch(e.scope, options.scope),
+      };
     });
 
     return scored
-      .filter((s) => s.score > 0)
-      .sort((a, b) => b.score - a.score || b.entry.usageCount - a.entry.usageCount)
+      .filter((s) => s.queryScore > 0)
+      .sort(
+        (a, b) =>
+          b.scopeScore - a.scopeScore ||
+          b.queryScore - a.queryScore ||
+          b.entry.usageCount - a.entry.usageCount,
+      )
       .slice(0, limit)
       .map((s) => s.entry);
   }

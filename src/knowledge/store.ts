@@ -5,6 +5,12 @@
  * that agents accumulate across tasks.
  */
 
+export interface KnowledgeScope {
+  tenant?: string;
+  workflowType?: string;
+  queue?: string;
+}
+
 export interface KnowledgeEntry {
   id: string;
   type: "solution" | "pattern" | "error" | "decision" | "context";
@@ -17,6 +23,7 @@ export interface KnowledgeEntry {
   };
   tags: string[];
   relatedFiles: string[];
+  scope?: KnowledgeScope;
   embedding?: number[];
   confidence: number;
   usageCount: number;
@@ -31,6 +38,7 @@ export interface SearchOptions {
   types?: KnowledgeEntry["type"][];
   tags?: string[];
   maxAge?: number;
+  scope?: KnowledgeScope;
 }
 
 export interface KnowledgeStats {

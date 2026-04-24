@@ -11,6 +11,8 @@ export { ClaudeCodeAgent } from './workflows/claude-code-agent';
 export type { ClaudeCodeAgentConfig } from './workflows/claude-code-agent';
 export { ManagedClaudeCodeAgent } from './workflows/managed-claude-code-agent';
 export type { ManagedClaudeCodeAgentConfig } from './workflows/managed-claude-code-agent';
+export { ManagedCodexAgent } from './workflows/managed-codex-agent';
+export type { ManagedCodexAgentConfig } from './workflows/managed-codex-agent';
 
 // Workflows
 export type { AutoDeployConfig, PipelineConfig, PipelineLogger, PipelineResult, CodeAgent, IssueContext, CodeAgentResult } from './workflows/issue-pipeline';
@@ -57,9 +59,14 @@ export type { Deployer, DeployConfig, DeployResult, DeployOptions, DeployStatus 
 
 // Knowledge
 export { InMemoryKnowledgeStore } from './knowledge/in-memory-store';
-export type { KnowledgeStore, KnowledgeEntry, SearchOptions, KnowledgeStats } from './knowledge/store';
+export { ChromaKnowledgeStore } from './knowledge/chroma-store';
+export { createKnowledgeStore } from './knowledge/factory';
+export type { KnowledgeStore, KnowledgeEntry, KnowledgeScope, SearchOptions, KnowledgeStats } from './knowledge/store';
+export type { KnowledgeStoreConfig } from './knowledge/factory';
 export { LLMKnowledgeExtractor } from './knowledge/extractor';
 export type { ExtractionContext, KnowledgeExtractor } from './knowledge/extractor';
+export { createKnowledgeExtractor } from './knowledge/extractor-factory';
+export type { KnowledgeExtractorFactoryConfig } from './knowledge/extractor-factory';
 
 // Monitoring
 export { HealthAggregator } from './monitoring/health-aggregator';

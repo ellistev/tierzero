@@ -4,8 +4,8 @@
  * Uses Codex CLI authenticated via local OAuth to solve GitHub issues.
  */
 
-import { execFileSync, spawn } from "node:child_process";
-import { writeFileSync, unlinkSync, existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, writeFileSync, unlinkSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { CodeAgent, IssueContext, CodeAgentResult } from "./issue-pipeline";
 import type { KnowledgeStore, KnowledgeEntry } from "../knowledge/store";
@@ -21,6 +21,7 @@ export interface CodexCliAgentConfig {
   extraContext?: string;
   knowledgeStore?: KnowledgeStore;
   knowledgeExtractor?: KnowledgeExtractor;
+  artifactsDir?: string;
 }
 
 export class CodexCliAgent implements CodeAgent {
@@ -30,6 +31,7 @@ export class CodexCliAgent implements CodeAgent {
   private readonly extraContext: string;
   private readonly knowledgeStore: KnowledgeStore | null;
   private readonly knowledgeExtractor: KnowledgeExtractor | null;
+  private readonly artifactsDir: string | null;
 
   constructor(config: CodexCliAgentConfig = {}) {
     this.codexPath = config.codexPath ?? "codex";
@@ -38,22 +40,32 @@ export class CodexCliAgent implements CodeAgent {
     this.extraContext = config.extraContext ?? "";
     this.knowledgeStore = config.knowledgeStore ?? null;
     this.knowledgeExtractor = config.knowledgeExtractor ?? null;
+    this.artifactsDir = config.artifactsDir ?? null;
   }
 
   async solve(issue: IssueContext, workDir: string): Promise<CodeAgentResult> {
+    this.ensureGitSafeDirectory(workDir);
     const priorKnowledge = await this.searchPriorKnowledge(issue);
     const taskPath = join(workDir, "TASK.md");
     const taskContent = this.buildTaskFile(issue, priorKnowledge);
     writeFileSync(taskPath, taskContent, "utf-8");
+    this.writeArtifacts("before", issue, priorKnowledge, {
+      taskFile: taskContent,
+    });
 
     try {
       const output = await this.runCodex(
-        "Read TASK.md. Implement everything described. Run tests and make sure they pass. Do NOT modify existing test files unless the task explicitly requires it. Delete TASK.md when done.",
+        "Read TASK.md. Implement everything described. Do not stop after only reviewing files or running tests. If any acceptance criterion is unmet, make the necessary code changes and keep the diff focused. Treat zero-diff as failure when the requested UI is still missing. For UI issues, prefer updating the named target file directly instead of concluding the work is already done. Run tests and make sure they pass. Do NOT modify existing test files unless the task explicitly requires it. Delete TASK.md when done.",
         workDir,
       );
       const filesChanged = this.getChangedFiles(workDir);
       const summary = this.extractSummary(output, issue);
       await this.extractKnowledge(issue, output, filesChanged, workDir);
+      this.writeArtifacts("after", issue, priorKnowledge, {
+        output,
+        summary,
+        filesChanged,
+      });
       return { summary, filesChanged };
     } finally {
       try { if (existsSync(taskPath)) unlinkSync(taskPath); } catch {}
@@ -61,6 +73,7 @@ export class CodexCliAgent implements CodeAgent {
   }
 
   async fixReviewFindings(instructions: string, workDir: string): Promise<CodeAgentResult> {
+    this.ensureGitSafeDirectory(workDir);
     const fixPath = join(workDir, "REVIEW_FIXES.md");
     writeFileSync(fixPath, instructions, "utf-8");
     try {
@@ -76,6 +89,7 @@ export class CodexCliAgent implements CodeAgent {
   }
 
   async fixTests(failures: string, workDir: string): Promise<CodeAgentResult> {
+    this.ensureGitSafeDirectory(workDir);
     const failPath = join(workDir, "TEST_FAILURES.md");
     writeFileSync(failPath, `# Test Failures\n\nFix these without changing test expectations:\n\n\`\`\`\n${failures.slice(0, 3000)}\n\`\`\``, "utf-8");
     try {
@@ -90,26 +104,44 @@ export class CodexCliAgent implements CodeAgent {
     return { summary: `Codex CLI fix attempt: ${filesChanged.length} files modified`, filesChanged };
   }
 
+  private ensureGitSafeDirectory(workDir: string): void {
+    try {
+      const normalized = workDir.replace(/\\/g, "/");
+      execFileSync("git", ["config", "--global", "--add", "safe.directory", normalized], {
+        stdio: "ignore",
+      });
+    } catch (err) {
+      log.info(`Unable to pre-authorize git safe.directory for Codex: ${(err as Error).message}`);
+    }
+  }
+
   private resolveCodexExecutable(): { exe: string; argsPrefix: string[] } {
+    const chooseRunnablePath = (paths: string[]): string | null => {
+      const runnable = paths.find((candidate) => /\.(exe|cmd|bat)$/i.test(candidate));
+      return runnable ?? paths.find((candidate) => /\.ps1$/i.test(candidate)) ?? paths[0] ?? null;
+    };
+
     if (existsSync(this.codexPath)) {
       return { exe: this.codexPath, argsPrefix: [] };
     }
 
     try {
-      const resolved = execFileSync("where.exe", [this.codexPath], { encoding: "utf-8" })
+      const candidates = execFileSync("where.exe", [this.codexPath], { encoding: "utf-8" })
         .split(/\r?\n/)
         .map((line) => line.trim())
-        .find(Boolean);
+        .filter(Boolean);
+      const resolved = chooseRunnablePath(candidates);
       if (resolved) return { exe: resolved, argsPrefix: [] };
     } catch {
       // ignore and try npx fallback
     }
 
     try {
-      const npx = execFileSync("where.exe", ["npx"], { encoding: "utf-8" })
+      const candidates = execFileSync("where.exe", ["npx"], { encoding: "utf-8" })
         .split(/\r?\n/)
         .map((line) => line.trim())
-        .find(Boolean);
+        .filter(Boolean);
+      const npx = chooseRunnablePath(candidates);
       if (npx) return { exe: npx, argsPrefix: ["-y", "@openai/codex"] };
     } catch {
       // ignore and let spawn fail clearly
@@ -119,47 +151,38 @@ export class CodexCliAgent implements CodeAgent {
   }
 
   private runCodex(prompt: string, workDir: string): Promise<string> {
-    return new Promise((resolve) => {
-      const resolved = this.resolveCodexExecutable();
-      const args = [...resolved.argsPrefix, "exec", "--model", this.model, prompt];
+    const resolved = this.resolveCodexExecutable();
+    const args = [
+      ...resolved.argsPrefix,
+      "exec",
+      "--model",
+      this.model,
+      "--full-auto",
+      "-",
+    ];
 
-      log.info(`Spawning Codex: ${resolved.exe} ${args.join(" ")}`);
-      const child = spawn(resolved.exe, args, {
+    log.info(`Spawning Codex: ${resolved.exe} ${args.join(" ")}`);
+
+    try {
+      const launch = prepareCodexLaunch(resolved.exe, args);
+      const stdout = execFileSync(launch.command, launch.args, {
         cwd: workDir,
-        stdio: ["ignore", "pipe", "pipe"],
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
         env: { ...process.env, FORCE_COLOR: "0" },
-        shell: false,
-        detached: true,
         windowsHide: true,
+        timeout: this.timeoutMs,
+        input: prompt,
       });
-
-      const chunks: string[] = [];
-      const stderrChunks: string[] = [];
-
-      child.stdout.on("data", (buf: Buffer) => {
-        const text = buf.toString();
-        chunks.push(text);
-        process.stdout.write(text);
-      });
-      child.stderr.on("data", (buf: Buffer) => stderrChunks.push(buf.toString()));
-
-      const timer = setTimeout(() => {
-        try { execFileSync("taskkill", ["/F", "/T", "/PID", String(child.pid)]); } catch {}
-        resolve(chunks.join(""));
-      }, this.timeoutMs);
-
-      child.on("close", () => {
-        clearTimeout(timer);
-        if (stderrChunks.length) log.info(`Codex stderr: ${stderrChunks.join("").slice(0, 500)}`);
-        resolve(chunks.join(""));
-      });
-
-      child.on("error", (err) => {
-        clearTimeout(timer);
-        log.error(`Codex spawn error: ${err.message}`);
-        resolve("");
-      });
-    });
+      return Promise.resolve(stdout);
+    } catch (err) {
+      const error = err as NodeJS.ErrnoException & { stdout?: string | Buffer; stderr?: string | Buffer };
+      const stdout = typeof error.stdout === "string" ? error.stdout : error.stdout?.toString() ?? "";
+      const stderr = typeof error.stderr === "string" ? error.stderr : error.stderr?.toString() ?? "";
+      if (stderr) log.info(`Codex stderr: ${stderr.slice(0, 500)}`);
+      if (error.message) log.error(`Codex exec error: ${error.message}`);
+      return Promise.resolve(stdout);
+    }
   }
 
   private buildTaskFile(issue: IssueContext, priorKnowledge: KnowledgeEntry[] = []): string {
@@ -183,6 +206,7 @@ export class CodexCliAgent implements CodeAgent {
     sections.push(
       "## Acceptance Criteria",
       "- Implement the requested change completely",
+      "- If the issue names a target file or surface, make the change there or in directly supporting files rather than substituting unrelated improvements",
       "- Run tests and make sure they pass",
       "- Do not change tests unless explicitly required",
       "- Follow existing patterns and keep the diff focused",
@@ -220,6 +244,45 @@ export class CodexCliAgent implements CodeAgent {
     }
   }
 
+  private writeArtifacts(
+    phase: "before" | "after",
+    issue: IssueContext,
+    priorKnowledge: KnowledgeEntry[],
+    payload: {
+      taskFile?: string;
+      output?: string;
+      summary?: string;
+      filesChanged?: string[];
+    },
+  ): void {
+    if (!this.artifactsDir) return;
+
+    try {
+      mkdirSync(this.artifactsDir, { recursive: true });
+
+      if (phase === "before") {
+        writeFileSync(join(this.artifactsDir, "input-issue.json"), JSON.stringify(issue, null, 2) + "\n", "utf-8");
+        writeFileSync(join(this.artifactsDir, "knowledge-bank.json"), JSON.stringify(priorKnowledge, null, 2) + "\n", "utf-8");
+        if (payload.taskFile) {
+          writeFileSync(join(this.artifactsDir, "input-task.md"), payload.taskFile, "utf-8");
+        }
+        return;
+      }
+
+      writeFileSync(
+        join(this.artifactsDir, "output.json"),
+        JSON.stringify({
+          summary: payload.summary ?? "",
+          filesChanged: payload.filesChanged ?? [],
+          output: payload.output ?? "",
+        }, null, 2) + "\n",
+        "utf-8",
+      );
+    } catch (err) {
+      log.info(`Unable to write Codex artifacts: ${(err as Error).message}`);
+    }
+  }
+
   private async extractKnowledge(issue: IssueContext, output: string, filesChanged: string[], workDir: string): Promise<void> {
     if (!this.knowledgeExtractor || !this.knowledgeStore) return;
     try {
@@ -241,4 +304,31 @@ export class CodexCliAgent implements CodeAgent {
       log.error(`Knowledge extraction failed: ${(err as Error).message}`);
     }
   }
+}
+
+function prepareCodexLaunch(executable: string, args: string[]): { command: string; args: string[] } {
+  const lower = executable.toLowerCase();
+
+  if (lower.endsWith(".cmd") || lower.endsWith(".bat")) {
+    const comspec = process.env.ComSpec ?? "cmd.exe";
+    const commandLine = [quoteForCmd(executable), ...args.map(quoteForCmd)].join(" ");
+    return {
+      command: comspec,
+      args: ["/d", "/s", "/c", commandLine],
+    };
+  }
+
+  if (lower.endsWith(".ps1")) {
+    return {
+      command: "powershell.exe",
+      args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", executable, ...args],
+    };
+  }
+
+  return { command: executable, args };
+}
+
+function quoteForCmd(value: string): string {
+  if (/^[A-Za-z0-9_:\\.\/-]+$/.test(value)) return value;
+  return `"${value.replace(/"/g, '""')}"`;
 }

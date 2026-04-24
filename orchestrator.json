@@ -1,0 +1,54 @@
+{
+  "adapters": {
+    "github": {
+      "owner": "your-org",
+      "repo": "your-repo",
+      "label": "tierzero-agent",
+      "interval": 180,
+      "trustedAuthors": [
+        "your-org"
+      ],
+      "requireTrustedAuthor": true
+    }
+  },
+  "agents": {
+    "default-agent": {
+      "type": "claude-code",
+      "capabilities": [
+        "code",
+        "research"
+      ],
+      "maxConcurrent": 1
+    }
+  },
+  "scheduler": {
+    "timezone": "UTC",
+    "jobs": []
+  },
+  "knowledge": {
+    "enabled": false,
+    "backend": "memory",
+    "extractor": {
+      "enabled": true,
+      "model": "gpt-4o-mini"
+    }
+  },
+  "apiPort": 3500,
+  "maxConcurrent": 3,
+  "taskTimeoutMs": 900000,
+  "prReview": {
+    "enabled": true,
+    "minScore": 70,
+    "maxErrors": 0,
+    "maxWarnings": 5,
+    "useLLM": true,
+    "rules": [
+      "no-console-log",
+      "no-todo",
+      "test-coverage",
+      "no-any",
+      "file-size",
+      "no-secrets"
+    ]
+  }
+}

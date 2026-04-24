@@ -1,0 +1,46 @@
+{
+  "adapters": {
+    "github": {
+      "owner": "ellistev",
+      "repo": "DeadByAI",
+      "label": "tierzero-agent",
+      "interval": 180,
+      "trustedAuthors": [
+        "ellistev"
+      ],
+      "requireTrustedAuthor": true
+    }
+  },
+  "agents": {
+    "default-agent": {
+      "type": "codex",
+      "capabilities": [
+        "code",
+        "research"
+      ],
+      "maxConcurrent": 1
+    }
+  },
+  "scheduler": {
+    "timezone": "UTC",
+    "jobs": []
+  },
+  "apiPort": 3500,
+  "maxConcurrent": 3,
+  "taskTimeoutMs": 900000,
+  "prReview": {
+    "enabled": true,
+    "minScore": 70,
+    "maxErrors": 0,
+    "maxWarnings": 5,
+    "useLLM": true,
+    "rules": [
+      "no-console-log",
+      "no-todo",
+      "test-coverage",
+      "no-any",
+      "file-size",
+      "no-secrets"
+    ]
+  }
+}

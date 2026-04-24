@@ -17,6 +17,14 @@ describe("config-validator", () => {
             interval: 120,
           },
         },
+        knowledge: {
+          enabled: true,
+          backend: "chroma",
+          chroma: {
+            chromaUrl: "http://localhost:8000",
+            collectionName: "tierzero-knowledge",
+          },
+        },
         agents: {
           "default-agent": {
             type: "claude-code",
@@ -86,6 +94,52 @@ describe("config-validator", () => {
       const err = result.errors.find(e => e.field === "adapters.webhook.port");
       assert.ok(err);
       assert.ok(err.message.includes("between 1 and 65535"));
+    });
+
+    it("fails when knowledge backend is unrecognized", () => {
+      const config = {
+        adapters: {},
+        knowledge: { enabled: true, backend: "postgres" },
+      } as unknown as OrchestratorConfig;
+      const result = validateConfig(config);
+      const err = result.errors.find(e => e.field === "knowledge.backend");
+      assert.ok(err);
+      assert.ok(err.message.includes("memory, chroma"));
+    });
+
+    it("fails when knowledge is enabled without an explicit backend", () => {
+      const config: OrchestratorConfig = {
+        adapters: {},
+        knowledge: { enabled: true },
+      };
+      const result = validateConfig(config);
+      const err = result.errors.find(e => e.field === "knowledge.backend");
+      assert.ok(err);
+      assert.ok(err.message.includes("set explicitly"));
+    });
+
+    it("fails when knowledge chromaUrl is not a string", () => {
+      const config = {
+        adapters: {},
+        knowledge: { enabled: true, backend: "chroma", chroma: { chromaUrl: 123 } },
+      } as unknown as OrchestratorConfig;
+      const result = validateConfig(config);
+      const err = result.errors.find(e => e.field === "knowledge.chroma.chromaUrl");
+      assert.ok(err);
+    });
+
+    it("fails when knowledge extractor model is not a string", () => {
+      const config = {
+        adapters: {},
+        knowledge: {
+          enabled: true,
+          backend: "memory",
+          extractor: { model: 123 },
+        },
+      } as unknown as OrchestratorConfig;
+      const result = validateConfig(config);
+      const err = result.errors.find(e => e.field === "knowledge.extractor.model");
+      assert.ok(err);
     });
 
     it("fails when apiPort is out of range", () => {

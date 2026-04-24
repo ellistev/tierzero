@@ -13,6 +13,7 @@ describe('package exports', () => {
     const mod = await import('./index');
     assert.equal(typeof mod.ClaudeCodeAgent, 'function');
     assert.equal(typeof mod.ManagedClaudeCodeAgent, 'function');
+    assert.equal(typeof mod.ManagedCodexAgent, 'function');
   });
 
   it('exports all connector classes', async () => {
@@ -44,6 +45,8 @@ describe('package exports', () => {
   it('exports knowledge classes', async () => {
     const mod = await import('./index');
     assert.equal(typeof mod.InMemoryKnowledgeStore, 'function');
+    assert.equal(typeof mod.ChromaKnowledgeStore, 'function');
+    assert.equal(typeof mod.createKnowledgeStore, 'function');
     assert.equal(typeof mod.LLMKnowledgeExtractor, 'function');
   });
 

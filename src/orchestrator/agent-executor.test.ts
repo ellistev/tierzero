@@ -1,6 +1,6 @@
 import { describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
-import { createAgentExecutor, type AgentExecutorConfig } from "./agent-executor";
+import { createAgentExecutor, deriveKnowledgeScope, enrichTaskWithPriorKnowledge, type AgentExecutorConfig } from "./agent-executor";
 import { AgentSupervisor } from "./supervisor";
 import type { NormalizedTask, TaskResult } from "./agent-registry";
 import { InMemoryKnowledgeStore } from "../knowledge/in-memory-store";
@@ -91,15 +91,27 @@ describe("createAgentExecutor", () => {
     await supervisor.shutdown(1000);
   });
 
-  it("searches knowledge store before execution", async () => {
+  it("searches knowledge store before execution with task scope", async () => {
     const knowledgeStore = new InMemoryKnowledgeStore();
-    await knowledgeStore.add({
+    const matchingId = await knowledgeStore.add({
       type: "solution",
       title: "Login fix pattern",
       content: "Use bcrypt for password hashing",
       source: { taskId: "prev-1", agentName: "claude-code", timestamp: new Date().toISOString() },
       tags: ["login", "auth"],
       relatedFiles: ["src/auth.ts"],
+      scope: { tenant: "acme", workflowType: "password-reset" },
+      confidence: 0.9,
+      supersededBy: null,
+    });
+    const otherTenantId = await knowledgeStore.add({
+      type: "solution",
+      title: "Login fix pattern",
+      content: "Reset credentials in a different tenant",
+      source: { taskId: "prev-2", agentName: "claude-code", timestamp: new Date().toISOString() },
+      tags: ["login", "auth"],
+      relatedFiles: ["src/auth.ts"],
+      scope: { tenant: "globex", workflowType: "password-reset" },
       confidence: 0.9,
       supersededBy: null,
     });
@@ -115,15 +127,24 @@ describe("createAgentExecutor", () => {
       knowledgeStore,
     });
 
-    const task = makeTask({ title: "Fix login auth bug" });
+    const task = makeTask({
+      title: "Fix login auth bug",
+      source: {
+        type: "webhook",
+        id: "src-1",
+        payload: {},
+        receivedAt: new Date().toISOString(),
+        metadata: { tenant: "acme", workflowType: "password-reset" },
+      },
+    });
     const result = await executor(task);
 
     assert.equal(result.success, true);
 
-    // Verify knowledge was accessed (usage count bumped)
-    const entries = await knowledgeStore.search("login auth");
-    assert.ok(entries.length > 0);
-    assert.ok(entries[0].usageCount > 0);
+    const matchingEntry = await knowledgeStore.get(matchingId);
+    const otherTenantEntry = await knowledgeStore.get(otherTenantId);
+    assert.equal(matchingEntry?.usageCount, 1);
+    assert.equal(otherTenantEntry?.usageCount, 0);
 
     await supervisor.shutdown(1000);
   });
@@ -170,6 +191,35 @@ describe("createAgentExecutor", () => {
 
     await supervisor.shutdown(1000);
   });
+
+  it("derives knowledge scope from task metadata", () => {
+    const scope = deriveKnowledgeScope(makeTask({
+      source: {
+        type: "webhook",
+        id: "src-1",
+        payload: { ticket: { queueName: "Service Desk" } },
+        receivedAt: new Date().toISOString(),
+        metadata: { customer: "Acme", workflow: "Password-Reset" },
+      },
+    }));
+
+    assert.deepEqual(scope, {
+      tenant: "acme",
+      workflowType: "password-reset",
+      queue: "service desk",
+    });
+  });
+
+  it("injects prior knowledge into the managed task description", () => {
+    const task = makeTask({ description: "Implement the login fix." });
+    const enriched = enrichTaskWithPriorKnowledge(task, [
+      "[solution] Login fix pattern: Reuse the auth service instead of inlining validation.",
+    ]);
+
+    assert.match(enriched.description, /## Prior Knowledge/);
+    assert.match(enriched.description, /Login fix pattern/);
+    assert.match(enriched.description, /Implement the login fix\./);
+  });
 });
 
 /**
@@ -193,6 +243,7 @@ function createMockAgentExecutor(
         const entries = await extraConfig.knowledgeStore.search(query, {
           limit: 5,
           minConfidence: 0.5,
+          scope: deriveKnowledgeScope(task),
         });
         for (const entry of entries) {
           await extraConfig.knowledgeStore.recordUsage(entry.id);
@@ -248,7 +299,10 @@ function createMockAgentExecutor(
               filesModified: [],
             });
             for (const entry of entries) {
-              await extraConfig.knowledgeStore.add(entry);
+              await extraConfig.knowledgeStore.add({
+                ...entry,
+                scope: deriveKnowledgeScope(task),
+              });
             }
           } catch { /* best-effort */ }
         }

@@ -2,14 +2,47 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   runStartupHealthCheck,
+  checkCodexCLI,
+  checkCodexAuth,
   checkClaudeCodeCLI,
   checkClaudeCodeAuth,
   checkGitHubToken,
-  type HealthCheckResult,
 } from "./startup-health";
 import type { OrchestratorConfig } from "./config-validator";
 
 describe("startup-health", () => {
+  describe("checkCodexCLI", () => {
+    it("returns ok when CLI is installed", async () => {
+      const execFn = async () => ({ stdout: "codex-cli 0.121.0", stderr: "" });
+      const result = await checkCodexCLI({ execFn });
+      assert.equal(result.status, "ok");
+      assert.ok(result.message.includes("Installed"));
+    });
+
+    it("returns warn when CLI is not installed", async () => {
+      const execFn = async () => { throw new Error("not found"); };
+      const result = await checkCodexCLI({ execFn });
+      assert.equal(result.status, "warn");
+      assert.ok(result.message.includes("Not installed"));
+    });
+  });
+
+  describe("checkCodexAuth", () => {
+    it("returns ok when authenticated", async () => {
+      const execFn = async () => ({ stdout: "Logged in using ChatGPT", stderr: "" });
+      const result = await checkCodexAuth({ execFn });
+      assert.equal(result.status, "ok");
+      assert.ok(result.message.includes("Authenticated"));
+    });
+
+    it("returns warn when not authenticated", async () => {
+      const execFn = async () => { throw new Error("not authed"); };
+      const result = await checkCodexAuth({ execFn });
+      assert.equal(result.status, "warn");
+      assert.ok(result.message.includes("Not authenticated"));
+    });
+  });
+
   describe("checkClaudeCodeCLI", () => {
     it("returns ok when CLI is installed", async () => {
       const execFn = async () => ({ stdout: "1.0.0", stderr: "" });
@@ -57,19 +90,19 @@ describe("startup-health", () => {
   });
 
   describe("runStartupHealthCheck", () => {
-    it("passes with valid config and mocked dependencies", async () => {
+    it("passes with valid codex config and mocked dependencies", async () => {
       const config: OrchestratorConfig = {
         adapters: {
           github: { owner: "org", repo: "repo" },
         },
         agents: {
-          "default": { type: "claude-code", capabilities: ["code"] },
+          default: { type: "codex", capabilities: ["code"] },
         },
       };
 
       const execFn = async (cmd: string) => {
-        if (cmd === "claude --version") return { stdout: "1.2.3", stderr: "" };
-        if (cmd === "claude auth status") return { stdout: "ok", stderr: "" };
+        if (cmd === "codex --version") return { stdout: "codex-cli 0.121.0", stderr: "" };
+        if (cmd === "codex login status") return { stdout: "Logged in using ChatGPT", stderr: "" };
         return { stdout: "", stderr: "" };
       };
 
@@ -80,11 +113,11 @@ describe("startup-health", () => {
       assert.ok(configCheck);
       assert.equal(configCheck.status, "ok");
 
-      const cliCheck = result.checks.find(c => c.component === "Claude Code CLI");
+      const cliCheck = result.checks.find(c => c.component === "Codex CLI");
       assert.ok(cliCheck);
       assert.equal(cliCheck.status, "ok");
 
-      const authCheck = result.checks.find(c => c.component === "Claude Code Auth");
+      const authCheck = result.checks.find(c => c.component === "Codex Auth");
       assert.ok(authCheck);
       assert.equal(authCheck.status, "ok");
     });
@@ -101,7 +134,7 @@ describe("startup-health", () => {
       assert.equal(configCheck.status, "fail");
     });
 
-    it("handles CLI not installed gracefully", async () => {
+    it("handles codex CLI not installed gracefully", async () => {
       const config: OrchestratorConfig = {
         adapters: {},
       };
@@ -109,12 +142,11 @@ describe("startup-health", () => {
       const execFn = async () => { throw new Error("not found"); };
       const result = await runStartupHealthCheck(config, { execFn, skipNetwork: true });
 
-      const cliCheck = result.checks.find(c => c.component === "Claude Code CLI");
+      const cliCheck = result.checks.find(c => c.component === "Codex CLI");
       assert.ok(cliCheck);
       assert.equal(cliCheck.status, "warn");
 
-      // Auth check should be skipped if CLI not installed
-      const authCheck = result.checks.find(c => c.component === "Claude Code Auth");
+      const authCheck = result.checks.find(c => c.component === "Codex Auth");
       assert.equal(authCheck, undefined);
     });
   });

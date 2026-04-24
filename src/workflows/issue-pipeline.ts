@@ -704,7 +704,11 @@ export class IssuePipeline {
   }
 
   private async runTests(command: string): Promise<TestResult> {
-    const [cmd, ...args] = command.split(/\s+/);
+    const [rawCmd, ...args] = command.split(/\s+/);
+    const cmd = process.platform === "win32" && rawCmd.toLowerCase() === "npm"
+      ? "npm.cmd"
+      : rawCmd;
+
     try {
       const output = await spawnStreaming(cmd, args, {
         cwd: this.config.workDir,
